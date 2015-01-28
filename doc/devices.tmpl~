@@ -1,0 +1,124 @@
+            +----------------------+
+            |        OS 211        |
+            |  TASK 0: ALARMCLOCK  |
+            |    DESIGN DOCUMENT   |
+            +----------------------+
+                   
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Yuliya Gitlina <yuliya.gitlina13@imperial.ac.uk>
+Artem Kalikin <artem.kalikin13@imperial.ac.uk>
+Jiahao Lin <jiahao.lin13@imperial.ac.uk>
+Zhuofan Zhang <zhuofan.zhang13@imperial.ac.uk>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, or notes for the
+>> markers, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+                 ALARM CLOCK
+                 ===========
+Q1: git clone https://gitlab.doc.ic.ac.uk/lab1415_spring/pintos_<gnum>.git
+
+Q2: page 84, main spec
+
+When used carelessly strcpy() can overflow the buffer reserved for its output string since the length of sourse string can be larger than amount of destination space. It's better to use strlcpy(char *dst, const char *src, size_t size) instead, which also includes length of string to be copied. If SRC is longer than SIZE - 1 characters, only SIZE - 1 characters are copied and a null terminator is always written to DST, unless SIZE is 0.
+   
+Q3: page 55, main spec
+
+functions participating:
+
+	schedule()
+	thread_block()
+	thread_exit()
+	thread_yield()
+	next_thread_to_run()
+	switch_threads()
+	thread_schedule_tail()
+	thread_create()
+
+how interact, in which order, etc.
+
+Function schedule() is responsible for switching threads and is called only by the three public thread functions that need to switch threads: thread_block(), thread_exit(), and thread_yield(). Those functions in turn disable interrupts prior to calling schedule() and then change the running thread's state accordingly.
+
+Scheduling in Pintos is split in two parts. Firstly, schedule() records the current thread in local variable cur, determines the next thread to run as local variable next (by calling next_thread_to_run()), and then calls switch_threads(), which actually does thread switching.
+
+It then calls function thread_schedule_tail(), which marks the new thread as running. If previous thread is in the dying state, it also frees the page that contained the dying thread's struct thread and stack.
+
+(Not completed, needs check)
+
+Q4: page 3, main spec
+
+Reproducibility - running tests for many times to achieve better results? (not sure)
+Reproducibility is useful for debugging since QEMU simulator is not necessarily deterministic. Timer interrupts occur at irregularly spaced intervals, so it's very important to run through the tests at least few times to be more confident that there are no serious bugs. If very few attempts to test code are done, some major flaws might not be identified.
+
+Q5: page 84, main spec 
+
+#include <stdint.h>
+#include <stdio.h>
+#include <inttypes.h>
+
+uint64_t value = ...
+printf("%" PRIu64 "\n", value);
+
+Q6: page 57-58, main spec
+
+A lock is like a semaphore with an initial value of 1. 
+Semaphores and locks have similar operators, which are up/release and down/acquire accordingly. These correspond to the following functions:
+void sema_down (struct semaphore *sema) for semaphores is equivalent to void lock_acquire (struct lock *lock) for locks. The same goes for void sema_up (struct semaphore *sema) and void lock_release (struct lock *lock), and for bool sema_try_down (struct semaphore *sema) and bool lock_try_acquire (struct lock *lock).
+
+There are two main differences between a lock and a semaphore.  First, a semaphore can have a value greater than 1, but a lock can only be owned by a single thread at a time.  Second, a semaphore does not have an owner,meaning that one thread can "down" the semaphore and then another one "up" it, but with a lock the same thread must both acquire and release it.
+
+
+Q7: page 52, main spec
+
+Each thread structure is stored in its own 4 kB page. The thread structure itself starts at the bottom of the page(at offset 0). The rest of the page is reserved for the thread's kernel stack, which grows downward from the top of the page (at offset 4 kB). `Struct thread' should stay well under 1kB.
+
+Kernel stacks must not be allowed to grow too large.  If it overflows, it will corrupt the thread state. The first symptom of either of these problems will probably be an assertion failure in thread_current(), which checks that the `magic' member of the running thread's `struct thread' is set to THREAD_MAGIC. Stack overflow will normally change this value, triggering the assertion.
+
+Q8: page 4 (Testing)
+
+    output file: /src/devices/build/tests/devices/alarm-multiple.output
+    result: /src/devices/build/tests/devices/alarm-multiple.result
+
+
+---- DATA STRUCTURES ----
+
+>> A1: (2 marks) 
+>> Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+---- ALGORITHMS ----
+
+>> A2: (2 marks)
+>> Briefly describe what happens in a call to timer_sleep(),
+>> including the actions performed by the timer interrupt handler 
+>> on each timer tick.
+
+>> A3: (2 marks)
+>> What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+
+---- SYNCHRONIZATION ----
+
+>> A4: (1 mark)
+>> How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?
+
+>> A5: (1 mark)
+>> How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?
+
+---- RATIONALE ----
+
+>> A6: (2 marks)
+>> Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
