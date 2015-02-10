@@ -11,8 +11,7 @@
 
 /* See [8254] for hardware details of the 8254 timer chip. */
 
-struct lock wait_list_lock; // variable we added
-struct list wait_list; // variable we added
+struct list sleep_thread_list; // variable we added
 
 #if TIMER_FREQ < 19
 #error 8254 timer requires TIMER_FREQ >= 19
@@ -28,6 +27,8 @@ static int64_t ticks;
  Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+static bool sort_thread_use_wakeup_time(const struct list_elem *first_elem,
+		const struct list_elem *second_elem, void *aux UNUSED); // function we added
 static intr_handler_func timer_interrupt;
 static bool too_many_loops(unsigned loops);
 static void busy_wait(int64_t loops);
@@ -39,8 +40,7 @@ static void real_time_delay(int64_t num, int32_t denom);
 void timer_init(void) {
 	pit_configure_channel(0, 2, TIMER_FREQ);
 	intr_register_ext(0x20, timer_interrupt, "8254 Timer");
-	list_init(&wait_list);                    // initialize the wait list
-	lock_init(&wait_list_lock);               // initialize the wait list lock
+	list_init(&sleep_thread_list);                   // initialize the wait list
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -81,12 +81,14 @@ int64_t timer_elapsed(int64_t then) {
 	return timer_ticks() - then;
 }
 
-bool compare_threads_by_wakeup_time(const struct list_elem *a_,
-		const struct list_elem *b_, void *aux UNUSED) // function we added
+static bool sort_thread_use_wakeup_time(const struct list_elem *first_elem,
+		const struct list_elem *second_elem, void *aux UNUSED) // function we added
 {
-	const struct thread *a = list_entry(a_, struct thread, timer_list_elem);
-	const struct thread *b = list_entry(b_, struct thread, timer_list_elem);
-	return a->wakeup_time <= b->wakeup_time;
+	const struct thread *first_thread = list_entry(first_elem, struct thread,
+			sleep_list_elem);
+	const struct thread *second_thread = list_entry(second_elem, struct thread,
+			sleep_list_elem);
+	return first_thread->wakeup_time <= second_thread->wakeup_time;
 }
 
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
@@ -94,21 +96,15 @@ bool compare_threads_by_wakeup_time(const struct list_elem *a_,
 void timer_sleep(int64_t ticks) {
 	ASSERT(intr_get_level() == INTR_ON);  // ASSERTS first
 	if (ticks <= 0) {
-		return;
-	}               // if tick parameter is invalid, return
-
-	lock_acquire(&wait_list_lock);        // aquire lock before critical section
-	enum intr_level old_level = intr_disable(); // disable interrupts only for shared list mods
-
-	struct thread *t = thread_current();        // get pointer to current thread
-	t->wakeup_time = ticks + timer_ticks();    // set current thread wake time
-
-	list_insert_ordered(&wait_list, &t->timer_list_elem,
-			compare_threads_by_wakeup_time, &t->wakeup_time);
-	intr_set_level(old_level);                    // re-enable interrupts
-	lock_release(&wait_list_lock);        // release lock after critical section
-
-	sema_down(&(t->timer_semaphore)); // down the semaphore to block the thread while waiting
+		return; // return if no need to wait
+	}
+	struct thread *current_thread = thread_current(); // get current thread's pointer
+	current_thread->wakeup_time = ticks + timer_ticks(); // set wake up time of current thread
+	enum intr_level old_interrupt_level = intr_disable(); // disable interrupts and save old interrupt state
+	list_insert_ordered(&sleep_thread_list, &current_thread->sleep_list_elem,
+			sort_thread_use_wakeup_time, &current_thread->wakeup_time);
+	intr_set_level(old_interrupt_level);          // set interrupt to old level;
+	sema_down(&(current_thread->thread_semaphore)); // down the semaphore to block the thread during sleeping
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -169,15 +165,19 @@ void timer_print_stats(void) {
 
 /* Timer interrupt handler. */
 static void timer_interrupt(struct intr_frame *args UNUSED) {
-	struct list_elem *e = list_begin(&wait_list); // pointer to first element
-	struct thread *t = list_entry(e, struct thread, timer_list_elem); // pointer of thread item
-	int64_t now = timer_ticks(); // get now time
-	while ((e != list_end(&wait_list)) && (t->wakeup_time <= now)) { // while not list end and wake up time pasted
-		sema_up(&t->timer_semaphore); // release block
-		e = list_remove(e); // remove e from list, advance pointer
-		t = list_entry(e, struct thread, timer_list_elem); // update thread pointer
-	}
+
 	ticks++;
+	struct list_elem *element = list_begin(&sleep_thread_list); // first list element's pointer
+	struct thread *thread = list_entry(element, struct thread, sleep_list_elem); // pointer of thread item
+	int64_t time_now = timer_ticks(); // get now time
+	while ((thread->wakeup_time <= time_now)
+			&& (element != list_end(&sleep_thread_list))) { // while wake up time has passed and not to the end of list
+		sema_up(&thread->thread_semaphore); // unblock the thread by up the semaphore
+		 thread_yield_to_higher_priority_();
+		element = list_remove(element); // remove element from list, advance pointer
+		thread = list_entry(element, struct thread, sleep_list_elem); // update thread pointer
+	}
+	
 	thread_tick();
 }
 

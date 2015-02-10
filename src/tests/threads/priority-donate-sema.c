@@ -49,6 +49,7 @@ test_priority_donate_sema (void)
 static void
 l_thread_func (void *ls_) 
 {
+
   struct lock_and_sema *ls = ls_;
 
   lock_acquire (&ls->lock);
@@ -62,6 +63,7 @@ l_thread_func (void *ls_)
 static void
 m_thread_func (void *ls_) 
 {
+
   struct lock_and_sema *ls = ls_;
 
   sema_down (&ls->sema);
@@ -71,6 +73,7 @@ m_thread_func (void *ls_)
 static void
 h_thread_func (void *ls_) 
 {
+
   struct lock_and_sema *ls = ls_;
 
   lock_acquire (&ls->lock);

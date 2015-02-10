@@ -26,28 +26,52 @@ Zhuofan Zhang <zhuofan.zhang13@imperial.ac.uk>
                  ===========
 Q1: git clone https://gitlab.doc.ic.ac.uk/lab1415_spring/pintos_<gnum>.git
 
-Q2: page 84, main spec
-
-When used carelessly strcpy() can overflow the buffer reserved for its output string. The source string might not be correctly '\0' terminated, in which case the strcpy() function could write more characters to destination, corrupting anything which is in the memory after the destination buffer. It's better to use strlcpy(char *dst, const char *src, size_t size) instead, which also includes length of string to be copied. If SRC is longer than SIZE - 1 characters, only SIZE - 1 characters are copied and a null terminator is always written to DST, unless SIZE is 0.
+Q2: When used carelessly strcpy() can overflow the buffer reserved for its output
+string. The source string might not be correctly '\0' terminated, in which case
+the strcpy() function could write more characters to destination, corrupting
+anything which is in the memory after the destination buffer. It's better to use
+strlcpy(char *dst, const char *src, size_t size) instead, which also includes length
+of string to be copied. If SRC is longer than SIZE - 1 characters, only SIZE - 1 characters
+are copied and a null terminator is always written to DST, unless SIZE is 0.
    
-Q3: page 55, main spec
+Q3: Schedule() function basically finds another thread to run and switches to it.
+It is declared in thread.c and is called only by the three public thread functions
+that need to switch threads: thread_block(), thread_exit(), and thread_yield().
+Those functions in turn disable interrupts prior to calling schedule(). At entry
+to schedule(), interrupts must be switched off and the running process's state must
+have been changed from running to some other state (it should not have status
+THREAD_RUNNING). As function has fixed address as well as do all threads, the
+function must be called with interrupts disabled in order to avoid race condition.
 
-Function schedule() is responsible for switching threads and is called only by the three public thread functions that need to switch threads: thread_block(), thread_exit(), and thread_yield(). Those functions in turn disable interrupts prior to calling schedule() and then change the running thread's state accordingly.
+Scheduling in Pintos is split in two parts. Firstly, schedule() records the current
+thread in local variable cur, determines the next thread to run as local variable
+next (by calling next_thread_to_run()), and then calls switch_threads(), which
+actually does thread switching.In case if variables cur and next are different,
+switch_threads() replaces the running thread cur with next.
 
-Scheduling in Pintos is split in two parts. Firstly, schedule() records the current thread in local variable cur, determines the next thread to run as local variable next (by calling next_thread_to_run()), and then calls switch_threads(), which actually does thread switching.
+Also, it has interrupts to control concurrency. When a thread is running, it may
+receive many kinds of interrupts, including interrupts from kernel and interrupts
+from I/O. Timer interrupt is an important interrupt sent by kernel, which will
+interrupt the running thread every one tick, and then the scheduler will switch
+a thread to run in order to keep concurrency. But in other cases, for example by
+receiving a interrupt from I/O, the scheduler will consider the situation(normally
+compare the priorities to see which is more important to run first).
 
-It then calls function thread_schedule_tail(), which marks the new thread as running. If previous thread is in the dying state, it also frees the page that contained the dying thread's struct thread and stack.
+It then calls function thread_schedule_tail(), which marks the new thread's status
+as THREAD_RUNNING. If previous thread is in the dying state, i.e. has status
+THREAD_DYING, it also frees the page that contained the dying thread's struct
+thread and stack.
 
+Q4: When debugging code, it's useful to run a program multiple times and have
+it do exactly the same thing to be able to make new observations without having
+to discard or verify old ones. This property is called "reproducibility".
+Reproducibility is useful for debugging since QEMU simulator is not necessarily
+deterministic. Timer interrupts occur at irregularly spaced intervals, 
+so it's very important to run through the tests at least few times to be more 
+confident that there are no serious bugs. If very few attempts to test code are 
+done, some major flaws might not be identified.
 
-The role of interrupts?
-(Not completed, needs check)
-
-Q4: page 3, main spec
-
-Reproducibility - running tests for many times to achieve better results? (not sure)
-Reproducibility is useful for debugging since QEMU simulator is not necessarily deterministic. Timer interrupts occur at irregularly spaced intervals, so it's very important to run through the tests at least few times to be more confident that there are no serious bugs. If very few attempts to test code are done, some major flaws might not be identified.
-
-Q5: page 84, main spec 
+Q5: 
 
 #include <stdint.h>
 #include <stdio.h>
@@ -56,23 +80,34 @@ Q5: page 84, main spec
 uint64_t value = ...
 printf("%" PRIu64 "\n", value);
 
-Q6: page 57-58, main spec
+Q6: A lock is like a semaphore with an initial value of 1. Semaphores and locks
+have similar operators, which are up/release and down/acquire accordingly. 
+These correspond to the following functions: void sema_down (struct semaphore *sema) 
+for semaphores is equivalent to void lock_acquire (struct lock *lock) 
+for locks, which involves decrementing its value if positive. 
+The same goes for void sema_up (struct semaphore *sema) and 
+void lock_release (struct lock *lock), which increment its value, waking 
+up waiting thread, and for bool sema_try_down (struct semaphore *sema) and 
+bool lock_try_acquire (struct lock *lock).
 
-A lock is like a semaphore with an initial value of 1. Semaphores and locks have similar operators, which are up/release and down/acquire accordingly. These correspond to the following functions:
-void sema_down (struct semaphore *sema) for semaphores is equivalent to void lock_acquire (struct lock *lock) for locks, which involves decrementing its value if positive. The same goes for void sema_up (struct semaphore *sema) and void lock_release (struct lock *lock), which increment its value, waking up waiting thread, and for bool sema_try_down (struct semaphore *sema) and bool lock_try_acquire (struct lock *lock).
+There are two main differences between a lock and a semaphore.  First, 
+a semaphore can have a value greater than 1, but a lock can only be owned 
+by a single thread at a time.  Second, a semaphore does not have an owner,
+meaning that one thread can "down" the semaphore and then another one "up" it, 
+but with a lock the same thread must both acquire and release it.
 
-There are two main differences between a lock and a semaphore.  First, a semaphore can have a value greater than 1, but a lock can only be owned by a single thread at a time.  Second, a semaphore does not have an owner,meaning that one thread can "down" the semaphore and then another one "up" it, but with a lock the same thread must both acquire and release it.
+Q7: Each thread structure is stored in its own 4 kB page. The thread structure itself 
+starts at the bottom of the page(at offset 0). The rest of the page is reserved for the 
+thread's kernel stack, which grows downward from the top of the page (at offset 4 kB). 
+`Struct thread' should stay well under 1kB.
 
+Kernel stacks must not be allowed to grow too large.  If it overflows, 
+it will corrupt the thread state. The first symptom of either of these problems 
+will probably be an assertion failure in thread_current(), which checks 
+that the `magic' member of the running thread's `struct thread' is set to THREAD_MAGIC. 
+Stack overflow will normally change this value, triggering the assertion.
 
-Q7: page 52, main spec
-
-Each thread structure is stored in its own 4 kB page. The thread structure itself starts at the bottom of the page(at offset 0). The rest of the page is reserved for the thread's kernel stack, which grows downward from the top of the page (at offset 4 kB). `Struct thread' should stay well under 1kB.
-
-Kernel stacks must not be allowed to grow too large.  If it overflows, it will corrupt the thread state. The first symptom of either of these problems will probably be an assertion failure in thread_current(), which checks that the `magic' member of the running thread's `struct thread' is set to THREAD_MAGIC. Stack overflow will normally change this value, triggering the assertion.
-
-Q8: page 4 (Testing)
-
-    output file: /src/devices/build/tests/devices/alarm-multiple.output
+Q8: output file: /src/devices/build/tests/devices/alarm-multiple.output
     result: /src/devices/build/tests/devices/alarm-multiple.result
 
 
@@ -83,30 +118,80 @@ Q8: page 4 (Testing)
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+------in thread.h, struct thread------
+>int64_t wakeup_time;
+   Represents when the thread should be woken up, also used in sorting the sleep list.
+
+>struct list_elem sleep_list_elem;       // sleep list's list elem
+   Used to store threads that need to be put on hold, list is sorted so that the first
+   element is always the next to be released, so we only need to check for the wakeup_time 
+   of that element.
+
+>struct semaphore thread_semaphore;
+ Used to block the thread that needs to sleep (use sema down) and unblock the thread 
+ when it needs to be woken up (use sema up).
+
+------in timer.c-------
+>struct lock sleep_thread_lock; // variable we added
+This lock in timer.c file is used to control access to timer_sleep function in order 
+to avoid race condition, when two threads call timer_sleep simultaneously.
+
+>struct list sleep_thread_list; // variable we added
+The list is used to store the threads that are blocked, the list elements are 
+inserted into the list in ascending order sorted by wakeup_time.
+
 ---- ALGORITHMS ----
 
 >> A2: (2 marks)
 >> Briefly describe what happens in a call to timer_sleep(),
 >> including the actions performed by the timer interrupt handler 
 >> on each timer tick.
+   If a thread needs to be put on sleep - when timer_sleep is called, 
+it sets the wakeup_time of a current thread to the time when it needs
+to be released (current number of ticks elapsed + number of ticks to wait).
+The lock is then acquired, we disable interrupts and save the old interrupt 
+level to restore it later, the current thread is then added to a sleeping 
+list, ordered by the time when it needs to wake up, the interrupts are 
+restored to their previous state, the lock is then released and we use 
+semaphore down to block the thread.
+   timer_interrupt on each tick acquires firt element in the sleeping list
+and compares its thread's wakeup_time to the current time (ticks) and if 
+needed, the thread is unblocked and deleted from the sleeping list. 
+
 
 >> A3: (2 marks)
 >> What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
+   The sleeping list is sorted, so that in timer_interrupt we only check
+the first element of that list. So if the first element is still not due
+to be released - the following elements won't be either. 
 
 ---- SYNCHRONIZATION ----
 
 >> A4: (1 mark)
 >> How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
+   The lock is acquired before the critical part of the code in the function, so only the 
+   thread that is holding the lock can execute sleep operation. Before return the lock
+   is released so other threads that are waiting can acquire the lock and sleep.
 
 >> A5: (1 mark)
 >> How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
+   Race conditions can be avoided by disabling interrupts just before insertion 
+into the sleeping list and enabling interrupts immediately after the insertion is
+finished.
 
 ---- RATIONALE ----
 
 >> A6: (2 marks)
 >> Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
+   The previous design that we implemented lacked the optimisation part,
+we didn't use locks or semaphores. So race condition is not avoided, and
+it was very inefficient since disable interrrupt for a long time may lead to
+missing information. We were going through all threads checking
+for the wakeup_time to see if a thread needs to be unblocked. Whereas
+with the current design we only go through the list of threads put on hold and
+race conditions are avoided.
 
