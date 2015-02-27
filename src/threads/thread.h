@@ -107,7 +107,16 @@ struct thread {
 	int fd_distibution;
 	struct list file_fd_list;
 	/* MOVE TO USERPROG SECTION LATER */
-	int exit_st; // exit status of the thread
+	int exit_status; // exit status of the thread
+
+    struct semaphore * child_alive;     /* smaphore indicating that child have not died yet */
+    struct semaphore * child_loading;   /* semaphore indicating if the child is still loading*/
+
+       struct thread * parent;             /* parent of the thread */
+          struct list_elem child;             /* element of parent's list of children*/
+          struct list children;               /* children of the thread */
+          struct list children_return;        /* children statuses */
+
 	// added
 
 
@@ -177,5 +186,18 @@ int thread_get_nice(void);
 void thread_set_nice(int);
 int thread_get_recent_cpu(void);
 int thread_get_load_avg(void);
+
+//added
+void thread_add_child (struct thread *, tid_t);
+struct return_status * thread_get_child_status (int);
+
+struct return_status
+  {
+    int tid;                            /* thread id */
+    int return_code;                    /* return code of the thread */
+    struct list_elem elem;
+  };
+
+//added
 
 #endif /* threads/thread.h */

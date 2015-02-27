@@ -28,6 +28,8 @@ static bool load(const char *cmdline, void (**eip)(void), void **esp,
 tid_t process_execute(const char *file_name) {
 	char *fn_copy;
 	tid_t tid;
+	char *fn_exec_copy;
+	char *rest;
 
 	/* Make a copy of FILE_NAME.
 	 Otherwise there's a race between the caller and load(). */
@@ -36,10 +38,11 @@ tid_t process_execute(const char *file_name) {
 		return TID_ERROR;
 
 	strlcpy(fn_copy, file_name, PGSIZE);
+	char *exec_file_name = strtok_r(fn_exec_copy, " ", &rest);
 
 	/* Create a new thread to execute FILE_NAME. */
 	printf("'%s'\n", "go to start process");
-	tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
+	tid = thread_create(exec_file_name, PRI_DEFAULT, start_process, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page(fn_copy);
 	return tid;
@@ -52,35 +55,94 @@ static void start_process(void *file_name_) {
 	struct intr_frame if_;
 	bool success;
 
+	char *rest;
+	char *token;
+	printf("'%s'\n", "we added");
+	printf("'%s'\n", file_name);
+	int arguments_length = strlen(file_name) + 1;
+	printf("arguments length is %d\n", arguments_length);
+
+	char *exec_file_name = strtok_r(file_name, " ", &rest);
+
+	printf("exec is %s \n", exec_file_name);
 	/* Initialize interrupt frame and load executable. */
 	memset(&if_, 0, sizeof if_);
 	if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
 	if_.cs = SEL_UCSEG;
 	if_.eflags = FLAG_IF | FLAG_MBS;
 
-	//WE ADDED
-	printf("'%s'\n", "we added");
-	printf("'%s'\n", file_name);
-	char **argument_list = malloc(sizeof(char) * strlen(file_name));
-	int index = 0;
-	char *token, *save_ptr;
-	for (token = strtok_r(file_name, " ", &save_ptr); token != NULL; token =
-			strtok_r(NULL, " ", &save_ptr)) {
-		argument_list[index++] = token;
+	/* If load failed, quit. */
+	success = load(exec_file_name, &if_.eip, &if_.esp, NULL, 0);
+
+
+	if (!success) {
+		palloc_free_page(file_name);
+		thread_exit();
+	}
+
+	char **argument_list = malloc(sizeof(char) * arguments_length);
+	if (argument_list == NULL)
+		PANIC("Out of memory, trying to alocate %d bytes.\n", arguments_length);
+	int argc = 0;
+	argument_list[argc++] = exec_file_name;
+	/* Due to carlessness of the user we can have multiple
+	 consecutive spaces which would break word alignment formula.
+	 Therefore we need to calculate the actual lenght of arguments*/
+	arguments_length = strlen(exec_file_name) + 1;
+
+	while ((token = strtok_r(NULL, " ", &rest))) {
+		arguments_length += strlen(token) + 1;
+		argument_list[argc++] = token;
 		printf("'%s'\n", token);
 	}
 
-	printf("Index is %d\n", index);
+	int **addresses = (int **) malloc(argc * sizeof(int *));
+	if (addresses == NULL)
+		PANIC("Out of memory, trying to alocate %d bytes.\n",
+				argc * sizeof(int *));
 
-	file_name = argument_list[0];
-	//WE ADDED
+	int i;
+	for (i = argc - 1; i >= 0; i--) {
+		int arg_length = strlen(argument_list[i]) + 1;
+		if_.esp -= arg_length;
+		addresses[i] = if_.esp;
+		memcpy(if_.esp, argument_list[i], arg_length);
+	}
 
-	success = load(file_name, &if_.eip, &if_.esp, argument_list, index);
+	/**
+	int word_align_offset = arguments_length % 4;
 
-	/* If load failed, quit. */
-	palloc_free_page(file_name);
-	if (!success)
-		thread_exit();
+	if_.esp -= word_align_offset != 0 ? 4 - word_align_offset : 0;
+**/
+	/* push 0 sentinel argument */
+	if_.esp -= 4;
+	*(int *) if_.esp = 0;
+
+	for (i = 0; i <= argc - 1; i++) {
+		if_.esp -= 4;
+		*(void **) (if_.esp) = addresses[i];
+	}
+
+	/* adding argv */
+	if_.esp -= 4;
+	*(char **) if_.esp = if_.esp + 4;
+
+	/* adding argc */
+	if_.esp -= 4;
+	*(int *) if_.esp = argc;
+
+	/* adding fake return address */
+	if_.esp -= 4;
+	*(int *) if_.esp = 0;
+
+	hex_dump(0, if_.esp, 100, 1);
+
+	printf("%s\n", "----------------");
+	free(argument_list);
+	free (addresses);
+	  palloc_free_page (file_name);
+	//ADDED
+	//ADDED
 
 	/* Start the user process by simulating a return from an
 	 interrupt, implemented by intr_exit (in
@@ -107,46 +169,46 @@ int process_wait(tid_t child_tid UNUSED) {
 
 	}
 	/*struct semaphore *child_alive;
-  struct thread *child;
-  struct thread *parent = thread_current ();
-  struct return_status *return_status = thread_get_child_status (child_tid);
-  struct list_elem *e;
+	 struct thread *child;
+	 struct thread *parent = thread_current ();
+	 struct return_status *return_status = thread_get_child_status (child_tid);
+	 struct list_elem *e;
 
-  for (e = list_begin (&parent->children); e != list_end (&parent->children);
-       e = list_next (e))
-    {
-      child = list_entry (e, struct thread, child);
-      if(child->tid == child_tid) break;
-    }
+	 for (e = list_begin (&parent->children); e != list_end (&parent->children);
+	 e = list_next (e))
+	 {
+	 child = list_entry (e, struct thread, child);
+	 if(child->tid == child_tid) break;
+	 }
 
-  if(child != NULL && child->child_alive != NULL && child->tid == child_tid) {
-    return -1;//we are already waiting for this thread
-  }
+	 if(child != NULL && child->child_alive != NULL && child->tid == child_tid) {
+	 return -1;//we are already waiting for this thread
+	 }
 
-  if(return_status != NULL){
-    list_remove (&return_status->elem);
-    return return_status -> return_code;
-  }
+	 if(return_status != NULL){
+	 list_remove (&return_status->elem);
+	 return return_status -> return_code;
+	 }
 
-  //thread with this tid is not a child of current thread
-  if(child != NULL && child->tid != child_tid) return -1;
+	 //thread with this tid is not a child of current thread
+	 if(child != NULL && child->tid != child_tid) return -1;
 
-  child_alive = (struct semaphore *) malloc (sizeof (struct semaphore));
-  sema_init (child_alive, 0);
-  child->child_alive = child_alive;
+	 child_alive = (struct semaphore *) malloc (sizeof (struct semaphore));
+	 sema_init (child_alive, 0);
+	 child->child_alive = child_alive;
 
-  int ret = -1;
+	 int ret = -1;
 
-  if(child->status != THREAD_DYING) {
-    sema_down (child_alive);
-    return_status = thread_get_child_status (child_tid);
-    ret = return_status -> return_code;
-    list_remove (&return_status->elem);
-    sema_down (child_alive);
-  }
+	 if(child->status != THREAD_DYING) {
+	 sema_down (child_alive);
+	 return_status = thread_get_child_status (child_tid);
+	 ret = return_status -> return_code;
+	 list_remove (&return_status->elem);
+	 sema_down (child_alive);
+	 }
 
-  free (child_alive);
-  return ret;*/
+	 free (child_alive);
+	 return ret;*/
 	return -1;
 }
 
@@ -247,7 +309,7 @@ struct Elf32_Phdr {
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack(void **esp, char ** a_l, int index);
+static bool setup_stack(void **esp);
 static bool validate_segment(const struct Elf32_Phdr *, struct file *);
 static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes,
@@ -342,7 +404,7 @@ bool load(const char *file_name, void (**eip)(void), void **esp,
 	}
 
 	/* Set up stack. */
-	if (!setup_stack(esp, argument_list, index))
+	if (!setup_stack(esp))
 		goto done;
 
 	/* Start address. */
@@ -459,7 +521,7 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 
 /* Create a minimal stack by mapping a zeroed page at the top of
  user virtual memory. */
-static bool setup_stack(void **esp, char ** argument_list, int index) {
+static bool setup_stack(void **esp) {
 	uint8_t *kpage;
 	bool success = false;
 
@@ -471,72 +533,6 @@ static bool setup_stack(void **esp, char ** argument_list, int index) {
 		else
 			palloc_free_page(kpage);
 	}
-
-	//ADDED
-	// index is length, is argument count +1
-
-	printf("Indexx is %d\n", index);
-	int x = index - 1;
-	void *address_array[index];
-	printf("%s\n", "----------------");
-	for (x = index - 1; x >= 0; x--) {
-		printf("length: %d\n", strlen(argument_list[x]) + 1);
-		printf("str: %s\n", argument_list[x]);
-
-		int argument_length = strlen(argument_list[x]) + 1;
-		*esp -= argument_length; // address - argument str len
-		printf(" address:    %p\n", *esp);
-
-		address_array[x] = *esp;
-		memcpy(*esp,argument_list[x],argument_length);
-		printf("  content:    %s\n", (char *)*esp);
-	}
-	printf("%s\n", "----------------");
-
-//word aligned
-	/* int word_align_offset = index % 4;
-	 *  *esp -= word_align_offset != 0 ? 4-word_align_offset : 0;
-	 * */
-	//word aligned
-
-	*esp -= 4; // push separate arguemnt
-	*((int *)(*esp)) = 0;
-	printf(" address:  %p\n", *esp);
-	printf("   content:   %d\n", *(char *)*esp);
-
-	printf("%s\n", "----------------");
-	for (x = 0; x <= index - 1; x++) { // pushing addresses
-		*esp -= 4;
-		*(void **) (*esp) = address_array[x];
-		printf("   address:    %p\n", *esp);
-		printf("  content:     %p\n\n", *(char *)*esp);
-
-	}
-
-	printf("%s\n", "----------------");
-	*esp -= 4; // address of head of arguments
-	*(char **) (*esp) = (*esp) + 4;
-	printf(" address:      %p\n", *esp);
-	printf("  content:     %p\n\n", *(char *)*esp);
-
-	printf("%s\n", "----------------");
-	*esp -= 4;
-	*((int *)*esp) = index; // index number
-	printf("   address:    %p\n", *esp);
-	printf("   content:    %d\n", *(int *)*esp);
-
-	printf("%s\n", "----------------");
-	*esp  -= 4;
-	*((int *)*esp) = 0; // return address
-	printf("   address:    %p\n", *esp);
-	printf("    content:     %d\n", *(char *)*esp);
-
-	hex_dump(0,*esp,100,1);
-
-	printf("%s\n", "----------------");
-	free(argument_list);
-	//ADDED
-	//ADDED
 
 	return success;
 }

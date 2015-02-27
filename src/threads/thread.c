@@ -803,3 +803,39 @@ int get_fd_from_file(struct file *file) {
 
 }
 
+void
+thread_add_child (struct thread * parent, tid_t child_id){
+  struct thread * child = get_thread_by_tid (child_id);
+
+  child -> parent = parent;
+  list_push_back (&parent -> children, &child->child);
+}
+
+struct return_status *
+thread_get_child_status(int cid){
+  struct return_status * rs_found;
+  struct thread * t = thread_current();
+  struct list_elem *e;
+
+  for (e = list_begin (&t->children_return); e != list_end (&t->children_return); e = list_next (e))
+  {
+    rs_found = list_entry (e, struct return_status, elem);
+    if(rs_found -> tid == cid) return rs_found;
+  }
+
+    return NULL;
+}
+
+struct thread *
+get_thread_by_tid (tid_t id){
+  struct list_elem *e;
+
+  for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if( t -> tid == id) return t;
+    }
+
+    return NULL;
+}

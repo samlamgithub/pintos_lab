@@ -26,6 +26,8 @@ void release_filesystem (void)
 
 typedef int pid_t;
 
+int argu_num = 0;
+
 static void syscall_handler(struct intr_frame *);
 
 void syscall_init(void) {
@@ -38,8 +40,8 @@ void * check_accessing_user_memory(struct intr_frame * f) {
 		return NULL;
 	}
 	if (is_user_vaddr(f->esp)) {
-		if (pagedir_get_page(thread_current()->pagedir, f->esp) != NULL) {
-			return pagedir_get_page(thread_current()->pagedir, f->esp);
+		if (pagedir_get_page(thread_current()->pagedir, f->esp+argu_num) != NULL) {
+			return pagedir_get_page(thread_current()->pagedir, f->esp+argu_num);
 		} else {
 			exit(-1);
 			return NULL;
@@ -65,23 +67,31 @@ void * check_accessing_user_memory2(void *esp) {
 void* get_argument(struct intr_frame *f) {
 	// check memory
 //	while (f->esp <= PHYS_BASE) {
-	printf("   address:    %p\n", f->esp);
+	printf("   address:    %p\n", f->esp+argu_num);
 	//	f->esp += 4;
 
 	//}
 	void * r = check_accessing_user_memory(f);
 	printf("   content:    %d\n", *(int *) r);
-		printf("  content2:    %s\n\n", (char *) r);
-	f->esp += sizeof(char*);
+		printf("  content2:    %s\n", (char *) r);
+		printf("  content3:    %p\n", r);
+		printf("  content4:    %s\n", (char *)check_accessing_user_memory2(r));
+	if (argu_num == 8){
+		printf("  content5:    %s\n\n", *(char***)r);
+		printf("  content6:    %s\n\n", (char *)*(int*)r);
+	}
+		argu_num += sizeof(int);
 	return r;
 }
 
 static void syscall_handler(struct intr_frame *f UNUSED) {
 	printf("%s", "Called -----------------Sys handler\n");
 	printf("   address:    %p\n", f->esp);
-	printf("  abc is :    %s\n", check_accessing_user_memory2((void *) 0xbffffffc));
-	printf("  echo is :    %s\n", check_accessing_user_memory2((void *) 0xbffffff7));
-	hex_dump(0, f->esp, 200, 1);
+//	printf("  abc is :    %s\n", check_accessing_user_memory2((void *) 0xbffffffc));
+//	printf("  echo is :    %s\n", check_accessing_user_memory2((void *) 0xbffffff7));
+	printf("  abc is :    %s\n", *(void **)(f->esp+8));
+	//putbuf(f->esp+8, 4);
+	hex_dump(f->esp, f->esp, 200, 1);
 	//uint32_t *stack_pointer = f->esp;
 	uint32_t syscall_id = *(int*) get_argument(f);
 	printf("Sys call ID is %d \n", syscall_id);
@@ -116,7 +126,7 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 				*(unsigned *) get_argument(f));
 		break;
 	case SYS_WRITE:
-		f->eax = write(*(int *) get_argument(f), get_argument(f),
+		f->eax = write(*(int *) get_argument(f), *(void **)(get_argument(f)),
 				*(unsigned *) get_argument(f));
 		break;
 	case SYS_SEEK:
@@ -383,7 +393,7 @@ int read(int fd, void *buffer, unsigned size) {
 
 }
 
-int write(int fd, const void *buffer, unsigned size) {
+int write(int fd, void *buffer, unsigned size) {
 	/*Writes size bytes from buffer to the open file fd. Returns the number of bytes actually
 	 written, which may be less than size if some bytes could not be written.
 	 Writing past end-of-file would normally extend the file, but file growth is not implemented
@@ -400,11 +410,11 @@ int write(int fd, const void *buffer, unsigned size) {
 
 	printf(" %s ", " ---Write called---\n");
 	printf("fd is %d \n", fd);
-	printf(" buffer is  %s\n", (char *) buffer);
+	printf(" buffer is  %s\n", (char*)buffer);
 	printf(" size is %d \n", size);
 	if (fd == 1) { // to console
 		if (size < 100) {
-			printf("size is %d", size);
+			printf("size is %d\n", size);
 			putbuf(buffer, size);
 		} else {
 			putbuf(buffer, 100);
