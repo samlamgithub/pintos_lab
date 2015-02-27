@@ -1,10 +1,10 @@
 #ifndef THREADS_THREAD_H
 #define THREADS_THREAD_H
-
 #include <stdint.h>
 #include <stdbool.h>
 #include "../lib/debug.h"
 #include "../lib/kernel/list.h"
+
 #include "synch.h"
 /* States in a thread's life cycle. */
 enum thread_status {
@@ -97,22 +97,37 @@ struct thread {
 	struct semaphore thread_semaphore; // semaphore for blocking and unblocking the thread.
 	int orig_priority;             //  thread's priority when created
 	struct list donating_threads_list; // list of threads donating priority to this thread
-	struct thread *donee;                   // the thread this thread is donating to.
+	struct thread *donee;              // the thread this thread is donating to.
 	struct list_elem donating_threads_elem;  // List element for donating list
 	struct lock * waiting_lock;              // the clock is waiting for
 	int64_t nice;                            // niceness advanced scheduler
 	int32_t recent_cpu;                      // recent cpu advanced scheduler
-    struct list_elem alive_list_elem;      //list element for list of alive threads
+	struct list_elem alive_list_elem;   //list element for list of alive threads
+
+	int fd_distibution;
+	struct list file_fd_list;
+	/* MOVE TO USERPROG SECTION LATER */
+	int exit_st; // exit status of the thread
 	// added
 
-#ifdef USERPROG
+
 	/* Owned by userprog/process.c. */
 	uint32_t *pagedir; /* Page directory. */
-#endif
+
+	// added
+	// added
+
 
 	/* Owned by thread.c. */
 	unsigned magic; /* Detects stack overflow. */
 
+};
+
+
+struct file_fd {
+   struct list_elem file_fd_list_elem;
+   struct file * fil;
+   int fd;
 };
 
 /* If false (default), use round-robin scheduler.
@@ -121,15 +136,16 @@ struct thread {
 extern bool thread_mlfqs;
 
 //added
-bool thread_lower_priority(const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED); //compare priorities of two threads
+bool thread_lower_priority(const struct list_elem *a_,
+		const struct list_elem *b_, void *aux UNUSED); //compare priorities of two threads
 void thread_yield_to_higher_priority_(void); //check and let the thread with higher priority run
 void thread_donate_priority(struct thread *donor);  // donate priority
-void thread_return_to_old_priority(struct thread *releaser, struct lock *lock);  //revert the changes after donating priority
+void thread_return_to_old_priority(struct thread *releaser, struct lock *lock); //revert the changes after donating priority
 void thread_priority_recompute(struct thread *t); //recompute priority of the thread
 static int32_t load_average; //estimate of the average number of threads ready to run over past minute
 struct list thread_list; // list of all live threads
-//added
 
+//added
 
 void thread_init(void);
 void thread_start(void);

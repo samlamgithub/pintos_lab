@@ -2,6 +2,7 @@
 #include <debug.h>
 #include "filesys/inode.h"
 #include "threads/malloc.h"
+#include "../lib/kernel/list.h"
 
 /* An open file. */
 struct file 

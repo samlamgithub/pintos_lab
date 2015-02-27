@@ -77,6 +77,17 @@ static void schedule(void);
 void thread_schedule_tail(struct thread *prev);
 static tid_t allocate_tid(void);
 
+
+ struct file* get_file_from_fd(int fd);
+
+int get_fd_from_file(struct file *f);
+
+int distribute_fd();
+
+void add_file_to_thread(struct file* f);
+
+void delete_file_from_thread(struct file* f);
+
 /* Initializes the threading system by transforming the code
  that's currently running into a thread.  This can't work in
  general and it is possible in this case only because loader.S
@@ -145,7 +156,7 @@ void thread_tick(void) {
 
 			// recompute load avg
 			load_average = (((int64_t) (59 * F / 60) * load_average / F)
-					     + ((F / 60) * ready_threads));
+					+ ((F / 60) * ready_threads));
 
 			for (e = list_begin(&thread_list); e != list_end(&thread_list); e =
 					list_next(e)) {
@@ -153,7 +164,7 @@ void thread_tick(void) {
 				struct thread *t = list_entry(e, struct thread,
 						alive_list_elem);
 				//recent_cpu = quotient * recent_cpu + nice.
-                //quotient = (2 * load_avg) / (2 * load_avg + 1)
+				//quotient = (2 * load_avg) / (2 * load_avg + 1)
 				int32_t quotient = (((int64_t) (2 * load_average)) * F
 						/ (2 * load_average + F));
 				t->recent_cpu = (((int64_t) quotient) * (t->recent_cpu) / F)
@@ -161,20 +172,20 @@ void thread_tick(void) {
 			}
 		}
 
-
 		if (!(timer_ticks() % 4)) { // every time slice (1/25 second)
 			for (e = list_begin(&thread_list); e != list_end(&thread_list); e =
 					list_next(e)) {
 				struct thread *t = list_entry(e, struct thread,
 						alive_list_elem);
-                // priority = PRI_MAX - (recent_cpu / 4) - (nice * 2).
+				// priority = PRI_MAX - (recent_cpu / 4) - (nice * 2).
 				int new_priority = convert_to_int_nearest_rounding(
 						PRI_MAX*F - ((t->recent_cpu)/4) - ((t->nice)*F) * 2);
 
-
-                //if as a result of calculation priority is out of boundaries - update priority to fix limits
-                //priority = min(old, pri_max) && max(old, pri_min)
-                new_priority = (new_priority < PRI_MIN) ? PRI_MIN : (new_priority > PRI_MAX) ? PRI_MAX : new_priority;
+				//if as a result of calculation priority is out of boundaries - update priority to fix limits
+				//priority = min(old, pri_max) && max(old, pri_min)
+				new_priority =
+						(new_priority < PRI_MIN) ? PRI_MIN :
+						(new_priority > PRI_MAX) ? PRI_MAX : new_priority;
 				//new_priority = (new_priority > PRI_MAX) ? PRI_MAX : new_priority;
 				t->orig_priority = new_priority;
 				t->priority = new_priority;
@@ -235,13 +246,13 @@ tid_t thread_create(const char *name, int priority, thread_func *function,
 	old_level = intr_disable();
 
 	if (thread_mlfqs) {
-        //set thread's fields for advanced scheduler
-        //change thread's priority to initial priority for advanced scheduler
-        //overwriting priority passed to init_thread()
+		//set thread's fields for advanced scheduler
+		//change thread's priority to initial priority for advanced scheduler
+		//overwriting priority passed to init_thread()
 		struct thread *cur = thread_current();
 		t->nice = cur->nice;
 		t->recent_cpu = cur->recent_cpu;
-        t->priority = PRI_MAX - (t->recent_cpu / (4 * F)) - (t->nice * 2);
+		t->priority = PRI_MAX - (t->recent_cpu / (4 * F)) - (t->nice * 2);
 		t->orig_priority = t->priority;
 	}
 
@@ -381,7 +392,7 @@ void thread_set_priority(int new_priority) {
 	enum intr_level old_level = intr_disable();
 	struct thread *c = thread_current();
 	c->orig_priority = new_priority;
-    thread_priority_recompute(c);
+	thread_priority_recompute(c);
 	intr_set_level(old_level);
 	thread_yield_to_higher_priority_();
 
@@ -402,7 +413,7 @@ void thread_donate_priority(struct thread *donor) { // Donor wants to donate pri
 	ASSERT(holder_thread != NULL);
 	list_push_back(&holder_thread->donating_threads_list,
 			&donor->donating_threads_elem); // adds it self to holder's donating list
-    thread_priority_recompute(holder_thread); // recompute donee's priority
+	thread_priority_recompute(holder_thread); // recompute donee's priority
 	thread_yield_to_higher_priority_(); // let max priority thread run
 }
 
@@ -411,18 +422,18 @@ void thread_return_to_old_priority(struct thread *releaser, struct lock *lock) {
 	ASSERT(releaser != NULL);
 	if (list_empty(&releaser->donating_threads_list)) { // empty donating list
 		releaser->priority = releaser->orig_priority;
-        releaser->donee = NULL;
-        thread_priority_recompute(releaser); // recompute priority
+		releaser->donee = NULL;
+		thread_priority_recompute(releaser); // recompute priority
 	} else {  // not empty donating list
 		enum intr_level old_level = intr_disable();
-        //releaser->donee = NULL;
+		//releaser->donee = NULL;
 		releaser->priority = releaser->orig_priority; // set priority to original one
 		intr_set_level(old_level);
 		struct list_elem *e;
 		struct list_elem *e2;
 		for (e = list_begin(&releaser->donating_threads_list);
 				e != list_end(&releaser->donating_threads_list); e) { // remove threads that are
-            // waiting for the lock out of donating list
+			// waiting for the lock out of donating list
 			struct thread *temp2 = list_entry(e, struct thread,
 					donating_threads_elem);
 			if (temp2->waiting_lock != NULL) {
@@ -440,32 +451,32 @@ void thread_return_to_old_priority(struct thread *releaser, struct lock *lock) {
 			}
 
 		}
-        thread_priority_recompute(releaser); // recompute priority
+		thread_priority_recompute(releaser); // recompute priority
 	}
 
 }
 
 void thread_priority_recompute(struct thread *c) {
 
-    ASSERT(c != NULL);
-    enum intr_level old_level = intr_disable();
-    int max_p = c->orig_priority;
-    if (!list_empty(&c->donating_threads_list)) {
-        struct thread *max =
-                list_entry(
-                        list_max(&c->donating_threads_list, thread_lower_priority, NULL),
-                        struct thread, donating_threads_elem);
-        if (max->priority > max_p) {
-            max_p = max->priority;
-        }
-        c->priority = max_p;
-        if (c->donee != NULL) {
-            thread_priority_recompute(c->donee);
-        }
-    } else {
-        c->priority = max_p;
-    }
-    intr_set_level(old_level);
+	ASSERT(c != NULL);
+	enum intr_level old_level = intr_disable();
+	int max_p = c->orig_priority;
+	if (!list_empty(&c->donating_threads_list)) {
+		struct thread *max =
+				list_entry(
+						list_max(&c->donating_threads_list, thread_lower_priority, NULL),
+						struct thread, donating_threads_elem);
+		if (max->priority > max_p) {
+			max_p = max->priority;
+		}
+		c->priority = max_p;
+		if (c->donee != NULL) {
+			thread_priority_recompute(c->donee);
+		}
+	} else {
+		c->priority = max_p;
+	}
+	intr_set_level(old_level);
 
 }
 
@@ -479,9 +490,10 @@ void thread_set_nice(int nice UNUSED) {
 	if (t == idle_thread)
 		return;
 	t->nice = nice; //set nice
-    //same calculations for new priority as in thread_tick()
-    int new_priority = PRI_MAX - (t->recent_cpu / (4 * F)) - (t->nice * 2);
-    new_priority = (new_priority < PRI_MIN) ? PRI_MIN : (new_priority > PRI_MAX) ? PRI_MAX : new_priority;
+	//same calculations for new priority as in thread_tick()
+	int new_priority = PRI_MAX - (t->recent_cpu / (4 * F)) - (t->nice * 2);
+	new_priority = (new_priority < PRI_MIN) ? PRI_MIN :
+					(new_priority > PRI_MAX) ? PRI_MAX : new_priority;
 	thread_set_priority(new_priority);
 	intr_set_level(old_level);
 }
@@ -584,9 +596,11 @@ static void init_thread(struct thread *t, const char *name, int priority) {
 	sema_init(&t->thread_semaphore, 0);
 	t->orig_priority = t->priority;            // Initialise original priority
 	list_init(&t->donating_threads_list); // Initialise the list of threads that have donated
+	list_init(&t->file_fd_list);
 	t->waiting_lock = NULL;  // set the lock used while acquiring a lock to null
 	t->donee = NULL;
 
+	t->fd_distibution = 2;
 	list_push_back(&all_list, &t->allelem);
 	// Added for BSD scheduler
 	t->nice = NICE_DEFAULT;
@@ -725,4 +739,67 @@ static tid_t allocate_tid(void) {
 /* Offset of `stack' member within `struct thread'.
  Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof(struct thread, stack);
+
+int distribute_fd() {
+	struct thread* t = thread_current();
+	int d = t->fd_distibution;
+	t->fd_distibution++;
+	return d;
+}
+
+void add_file_to_thread(struct file* f) {
+	struct thread* t = thread_current();
+	struct file_fd* new_file;
+	new_file = (struct file_fd*)malloc(sizeof(struct file_fd));
+	new_file->fd = distribute_fd();
+	new_file->fil = f;
+	list_push_back(&t->file_fd_list, &new_file->file_fd_list_elem);
+}
+
+
+void delete_file_from_thread(struct file* f) {
+	struct thread* t = thread_current();
+		struct list_elem *e;
+		struct list filelist = t->file_fd_list;
+		for (e = list_begin(&filelist); e != list_end(&filelist);
+				e = list_next(e)) {
+
+			struct file_fd *filefd = list_entry(e, struct file_fd, file_fd_list_elem);
+			if (filefd->fil == f) {
+				list_remove(&filefd->file_fd_list_elem);
+			}
+		}
+}
+
+ struct file* get_file_from_fd(int fd2) {
+	struct thread* t = thread_current();
+	struct list_elem *e;
+	struct list filelist = t->file_fd_list;
+	for (e = list_begin(&filelist); e != list_end(&filelist);
+			e = list_next(e)) {
+
+		struct file_fd *filefd = list_entry(e, struct file_fd, file_fd_list_elem);
+		if (filefd->fd == fd2) {
+		    return filefd->fil;
+		}
+	}
+	return NULL;
+
+}
+
+int get_fd_from_file(struct file *file) {
+	struct thread* t = thread_current();
+	struct list_elem *e;
+	struct list filelist = t->file_fd_list;
+	for (e = list_begin(&filelist); e != list_end(&filelist);
+			e = list_next(e)) {
+
+		struct file_fd *filefd = list_entry(e, struct file_fd, file_fd_list_elem);
+			if (filefd->fil == file) {
+			return filefd->fd;
+	}
+	}
+	return -1;
+
+}
 

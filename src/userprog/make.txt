@@ -1,0 +1,4 @@
+cd build && make all
+make[1]: Entering directory `/homes/jl6613/pintos_37/src/userprog/build'
+gcc -m32 -c ../../userprog/syscall.c -o userprog/syscall.o -g -msoft-float -O -fno-omit-frame-pointer -ffreestanding -fno-stack-protector -nostdinc -I../.. -I../../lib -I../../lib/kernel -Wall -W -Wstrict-prototypes -Wmissing-prototypes -Wsystem-headers -DUSERPROG -DFILESYS -MMD -MF userprog/syscall.d
+make[1]: Leaving directory `/homes/jl6613/pintos_37/src/userprog/build'
