@@ -109,7 +109,8 @@ static void start_process(void *file_name_) {
 		//printf("child loading sema uped 2\n");
 	}
 	if (success) {
-		cur->exec_file = filesys_open(exec_file_name);
+		//printf("exe file closinmg: %d\n", thread_current()->tid);
+	     cur->exec_file = filesys_open(exec_file_name);
 		file_deny_write(cur->exec_file);
 	} else {
 		palloc_free_page(file_name);
@@ -278,7 +279,11 @@ void process_exit(void) {
 	//printf("enter process exit id :%d \n",cur->tid);
 	sema_up(&cur->child_alive);
 	//printf("child alive sema uped\n");
+	//printf("exe file closinmg: %d\n", cur->exec_file->deny_write);
+	//printf("exe file closinmg: %d\n", thread_current()->tid);
 	file_close(cur->exec_file);
+	//file_allow_write(cur->exec_file);
+	//printf("exe file closed\n");
 	//sema_down (&cur->ret_sema);
 
 	/* Destroy the current process's page directory and switch back

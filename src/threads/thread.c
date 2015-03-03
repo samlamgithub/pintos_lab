@@ -871,7 +871,7 @@ int delete_file_from_thread(struct file* f) {
 }
 
 struct file* get_file_from_fd(int fd2) {
-	//printf("called\n");
+	//printf("called get file from fd with %d\n", fd2);
 
 	struct thread* t = thread_current();
 	struct list_elem *e;
@@ -938,9 +938,14 @@ struct file* get_file_from_fd(int fd2) {
 		struct file_fd *filefd = list_entry(e, struct file_fd,
 				file_fd_list_elem);
 		if (filefd->fd == fd2) {
+			//printf("GET FILE from fd found\n ");
+			if (filefd->fil == NULL) {
+				//printf("seek called NULLLLLLLLLLLLLLL\n ");
+			}
 			return filefd->fil;
 		}
 	}
+	//printf("get file from fd is nULL\n ");
 	return NULL;
 
 }

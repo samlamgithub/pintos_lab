@@ -147,6 +147,7 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		f->eax = filesize(*((int *) get_argument(f)));
 		break;
 	case SYS_READ: {
+		//printf("read called 1\n");
 		int fd = *(int *) get_argument(f);
 		//printf("fd: %d\n", fd);
 		char * real_buffer = (char *) check_accessing_user_memory2(
@@ -166,11 +167,19 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 				*(void **) get_argument(f));
 		unsigned size = *(unsigned *) get_argument(f);
 		f->eax = write(fd, real_buffer, size);
+		//printf(" write return: %d \n",f->eax);
 	}
-		//printf("return: %d",f->eax);
 		break;
-	case SYS_SEEK:
-		seek(*(int *) get_argument(f), *(unsigned *) get_argument(f));
+	case SYS_SEEK: {
+		//hex_dump(f->esp-30, f->esp-30, 100, 1);
+
+		int h = *(int *) get_argument(f);
+		unsigned off = *(unsigned *) get_argument(f);
+//printf("handle = %d\n", h);
+//printf("off = %d\n", off);
+		seek(h, off);
+	}
+
 		break;
 	case SYS_TELL:
 		f->eax = tell(*((int *) get_argument(f)));
@@ -183,6 +192,7 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		NOT_REACHED ()
 		;
 	}
+
 	//printf("system call!\n");
 	//thread_exit();
 }
@@ -206,7 +216,7 @@ int exit(int status) {
 		close(fh->fd);
 	}
 	printf("%s: exit(%d)\n", thread_current()->name, status);
-	//printf("exit call thread exit \n");
+	///printf("exit call thread exit \n");
 	thread_exit();
 	//printf(" thread exit return to exit\n");
 	//printf(":::::::::: exit return  with %d ::::::::::::\n", status);
@@ -290,7 +300,9 @@ int open(void *file) {
 	if (newfile == NULL) {
 		return -1;
 	}
-	return add_file_to_thread(newfile);
+	int ret = add_file_to_thread(newfile);
+	//printf("open returning %d\n",ret);
+	return ret;
 }
 
 int filesize(int fd) {
@@ -337,35 +349,27 @@ int read(int fd, void *buffer, unsigned size) {
 		}
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
-			struct inode *inod = file_get_inode(f);
-			struct file* newfile = file_open(inod);
-			if (newfile != NULL) {
-				//	printf("file length: %d\n", file_length(newfile));
-				int size_read = (int) file_read(newfile, buffer, size);
+
+				//printf("file length: %d\n", file_length(f));
+				//printf("reading with %d",fd);
+				int size_read = (int) file_read(f, buffer, size);
 				//printf("size read: %d\n", size_read);
 				if (size_read == size) {
-					file_close(newfile);
 					release_filesystem();
 					return size_read;
-				} else if (size_read == file_length(newfile)
+				} else if (size_read == file_length(f)
 						&& size_read != size) {
-					file_close(newfile);
 					release_filesystem();
 					return 0;
 				} else {
-					file_close(newfile);
+					//printf("read exit -1 1 %d\n");
 					release_filesystem();
 					exit(-1);
 					return -1;
 				}
-			} else {
-				release_filesystem();
-				exit(-1);
-				return -1;
-			}
 
 		} else {
-			printf("NULL -----\n");
+			//printf("NULL -----\n");
 			release_filesystem();
 			exit(-1);
 			return -1;
@@ -422,14 +426,18 @@ int write(int fd, const void *buffer, unsigned size) {
 			struct inode *inod = file_get_inode(f);
 			struct file* newfile = file_open(inod);
 			if (newfile != NULL) {
+				//printf("writing ing \n");
 				int size_wrote = file_write(newfile, buffer, size);
+				//printf("wrtoe : %d\n", size_wrote);
 				release_filesystem();
 				return size_wrote;
 			} else {
+
 				release_filesystem();
 				return 0;
 			}
 		} else {
+			//printf("wrtie exiting with -1\n");
 			exit(-1);
 			return 0;
 		}
@@ -446,12 +454,17 @@ void seek(int fd, unsigned position) {
 	 effort in system call implementation.
 	 */
 
+	//printf("seek called\n ");
 	struct thread * t = thread_current();
 	struct file * f = get_file_from_fd(fd);
-	if (f == NULL)
-		exit(-1);
+	if (f == NULL) {
+		//printf("seek called but NULL\n ");
+			exit(-1);
+	}
+
 
 	lock_filesystem();
+	//printf("seeking\n ");
 	file_seek(f, position);
 	release_filesystem();
 }

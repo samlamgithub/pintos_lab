@@ -141,7 +141,9 @@ file_allow_write (struct file *file)
   ASSERT (file != NULL);
   if (file->deny_write) 
     {
+	 // printf("reset===\n");
       file->deny_write = false;
+    //  printf("reset  %d\n", file->inode->deny_write_cnt);
       inode_allow_write (file->inode);
     }
 }
