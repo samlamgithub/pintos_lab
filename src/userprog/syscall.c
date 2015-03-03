@@ -45,7 +45,7 @@ void * check_accessing_user_memory(struct intr_frame * f) {
 	if (is_user_vaddr(f->esp + argu_num)) {
 		if (pagedir_get_page(thread_current()->pagedir,
 				f->esp + argu_num) != NULL) {
-			//printf("   addd:    %p\n", f->esp+argu_num);
+			//printf("    addd:    %p\n", f->esp+argu_num);
 			return pagedir_get_page(thread_current()->pagedir,
 					f->esp + argu_num);
 		} else {
@@ -147,7 +147,7 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		f->eax = filesize(*((int *) get_argument(f)));
 		break;
 	case SYS_READ: {
-		//printf("read called 1\n");
+		//printf("read called \n");
 		int fd = *(int *) get_argument(f);
 		//printf("fd: %d\n", fd);
 		char * real_buffer = (char *) check_accessing_user_memory2(
@@ -162,6 +162,7 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 	}
 		break;
 	case SYS_WRITE: {
+		//printf("write called \n");
 		int fd = *(int *) get_argument(f);
 		char * real_buffer = (char *) check_accessing_user_memory2(
 				*(void **) get_argument(f));
