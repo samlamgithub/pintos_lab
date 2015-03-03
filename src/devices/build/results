@@ -1,5 +1,0 @@
-pass tests/devices/alarm-single
-pass tests/devices/alarm-multiple
-pass tests/devices/alarm-simultaneous
-pass tests/devices/alarm-zero
-pass tests/devices/alarm-negative

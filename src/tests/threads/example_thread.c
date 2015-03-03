@@ -235,6 +235,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+  printf("crete 2 ===========%d\n", tid);
   t->current_directory = thread_current ()->current_directory;
 
   /* Inherit niceness and recent cpu time */

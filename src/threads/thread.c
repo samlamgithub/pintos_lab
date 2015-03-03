@@ -4,7 +4,6 @@
 #include <string.h>
 #include "../lib/kernel/list.h"
 #include "synch.h"
-#include <stdio.h>
 #include "thread.h"
 #include "interrupt.h"
 #include "palloc.h"
@@ -13,6 +12,9 @@
 #include "../lib/string.h"
 #include "fixed-point.h"
 #include "../devices/timer.h"
+#include "malloc.h"
+#include "../userprog/process.h"
+#include "../filesys/file.h"
 
 #define NICE_DEFAULT 0
 #define NICE_MAX 20
@@ -77,17 +79,6 @@ static void schedule(void);
 void thread_schedule_tail(struct thread *prev);
 static tid_t allocate_tid(void);
 
-
- struct file* get_file_from_fd(int fd);
-
-int get_fd_from_file(struct file *f);
-
-int distribute_fd();
-
-void add_file_to_thread(struct file* f);
-
-void delete_file_from_thread(struct file* f);
-
 /* Initializes the threading system by transforming the code
  that's currently running into a thread.  This can't work in
  general and it is possible in this case only because loader.S
@@ -144,6 +135,10 @@ void thread_tick(void) {
 	/* Update statistics. */
 	if (t == idle_thread)
 		idle_ticks++;
+#ifdef USERPROG
+	else if (t->pagedir != NULL)
+	user_ticks++;
+#endif
 	else
 		kernel_ticks++;
 
@@ -239,6 +234,8 @@ tid_t thread_create(const char *name, int priority, thread_func *function,
 	/* Initialize thread. */
 	init_thread(t, name, priority);
 	tid = t->tid = allocate_tid();
+//printf("create 2 ===========%d\n",tid);
+
 
 	/* Prepare thread for first run by initializing its stack.
 	 Do this atomically so intermediate values for the 'stack'
@@ -344,13 +341,42 @@ tid_t thread_tid(void) {
 /* Deschedules the current thread and destroys it.  Never
  returns to the caller. */
 void thread_exit(void) {
+	//printf("%s", "Thread exit called!\n");
 	ASSERT(!intr_context());
+	struct thread * t = thread_current();
 
+//#ifdef USERPROG
+	struct list_elem *e;
+	struct file_fd * fh;
+	struct return_status * rs;
+
+	if (t->parent != NULL) {
+		struct return_status * return_status = malloc(
+				sizeof(struct return_status));
+		return_status->tid = t->tid;
+		return_status->return_code = t->exit_status;
+		list_push_back(&t->parent->children_return, &return_status->elem);
+	}
+
+	//printf("%s", "debug1\n");
+
+#ifdef USERPROG
+	process_exit ();
+#endif
+
+	while (!list_empty(&t->children_return)) {
+		e = list_pop_front(&t->children_return);
+		rs = list_entry(e, struct return_status, elem);
+		free(rs);
+	}
+//#endif
+	//printf("%s", "debug4\n");
 	/* Remove thread from all threads list, set our status to dying,
 	 and schedule another process.  That process will destroy us
 	 when it calls thread_schedule_tail(). */
 	intr_disable();
 	list_remove(&thread_current()->allelem);
+	list_remove(&thread_current()->child);
 	list_remove(&thread_current()->alive_list_elem);
 	thread_current()->status = THREAD_DYING;
 	schedule();
@@ -590,17 +616,38 @@ static void init_thread(struct thread *t, const char *name, int priority) {
 	strlcpy(t->name, name, sizeof t->name);
 	t->stack = (uint8_t *) t + PGSIZE;
 	t->priority = priority;
+
+//#ifdef USERPROG
+
+
+		//printf("initiating sema s\n");
+	sema_init(&t->child_alive,0);
+	sema_init(&t->child_loading,0);
+	//printf("initiating sema s complete\n");
+	//printf("%d\n",list_size(&t->child_loading->waiters));
+	//	printf("%d\n",list_size(&t->child_alive->waiters));
+	//if (&t->child_loading != NULL) {
+
+		//printf("sema not null\n");
+	//}
+	t->parent = NULL;
+	list_init(&t->children);
+	list_init(&t->file_fd_list);
+	list_init(&t->children_return);
+	t->fd_distibution = 2;
+	  t->load_good = false;
+	//#endif
+
 	t->magic = THREAD_MAGIC;
 
 	t->wakeup_time = 0;
 	sema_init(&t->thread_semaphore, 0);
 	t->orig_priority = t->priority;            // Initialise original priority
 	list_init(&t->donating_threads_list); // Initialise the list of threads that have donated
-	list_init(&t->file_fd_list);
+	//list_init(&t->file_fd_list);
 	t->waiting_lock = NULL;  // set the lock used while acquiring a lock to null
 	t->donee = NULL;
 
-	t->fd_distibution = 2;
 	list_push_back(&all_list, &t->allelem);
 	// Added for BSD scheduler
 	t->nice = NICE_DEFAULT;
@@ -690,6 +737,11 @@ void thread_schedule_tail(struct thread *prev) {
 	/* Start new time slice. */
 	thread_ticks = 0;
 
+	#ifdef USERPROG
+	/* Activate the new address space. */
+	process_activate();
+	#endif
+
 	/* If the thread we switched from is dying, destroy its struct
 	 thread.  This must happen late so that thread_exit() doesn't
 	 pull out the rug under itself.  (We don't free
@@ -732,7 +784,7 @@ static tid_t allocate_tid(void) {
 	lock_acquire(&tid_lock);
 	tid = next_tid++;
 	lock_release(&tid_lock);
-
+ //printf("----------------------- allocate tid %d \n",tid);
 	return tid;
 }
 
@@ -740,6 +792,7 @@ static tid_t allocate_tid(void) {
  Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof(struct thread, stack);
 
+//#ifdef USERPROG
 int distribute_fd() {
 	struct thread* t = thread_current();
 	int d = t->fd_distibution;
@@ -747,40 +800,145 @@ int distribute_fd() {
 	return d;
 }
 
-void add_file_to_thread(struct file* f) {
+int add_file_to_thread(struct file* f) {
+	// printf(" origin file locqation %p \n",f);
+	//    printf(" origin file locqation %p \n",&f);
+	//printf("----------------^^---\n");
 	struct thread* t = thread_current();
 	struct file_fd* new_file;
-	new_file = (struct file_fd*)malloc(sizeof(struct file_fd));
-	new_file->fd = distribute_fd();
+	new_file = (struct file_fd*) malloc(sizeof(struct file_fd));
+	int fd = distribute_fd();
+	new_file->fd = fd;
 	new_file->fil = f;
+//	printf("----------add----^^----");
+	//printf("leng th %d\n",list_size(&t->file_fd_list));
 	list_push_back(&t->file_fd_list, &new_file->file_fd_list_elem);
+	//printf("leng th %d\n",list_size(&t->file_fd_list));
+	return fd;
 }
 
+int delete_file_from_thread(struct file* f) {
 
-void delete_file_from_thread(struct file* f) {
-	struct thread* t = thread_current();
-		struct list_elem *e;
-		struct list filelist = t->file_fd_list;
-		for (e = list_begin(&filelist); e != list_end(&filelist);
-				e = list_next(e)) {
-
-			struct file_fd *filefd = list_entry(e, struct file_fd, file_fd_list_elem);
-			if (filefd->fil == f) {
-				list_remove(&filefd->file_fd_list_elem);
-			}
-		}
-}
-
- struct file* get_file_from_fd(int fd2) {
 	struct thread* t = thread_current();
 	struct list_elem *e;
 	struct list filelist = t->file_fd_list;
+
+	//	e = list_begin(&filelist);
+
+	//printf("leng th %d\n",list_size(&filelist));
+	//	while(e != list_end(&filelist)) {
+
+	//if (e == &filelist.tail.prev) {
+	//	printf("is tail  \n");
+	//}
+
+//if (e == &filelist.tail.prev->prev) {
+//	printf("is tail prev \n");
+//}
+	//if (list_end(&filelist) != NULL && list_end(&filelist)->prev != NULL && list_end(&filelist)->next == NULL) {
+	//	printf("list end is tail !\n");
+	//	}
+	//	if (e != NULL && e->prev != NULL && e->next == NULL) {
+	//		printf("tail\n");
+	//	}
+	//	printf("ddd\n");
+	//	if (e == NULL ) {
+	//		printf("not 1\n");
+	//	}
+	//	if ( e->prev == NULL ) {
+	//				printf("not 2\n");
+	//			}
+	//	if ( e->next == NULL ) {
+	//				printf("not 3\n");
+	//			}
+
+	//struct file_fd *filefd = list_entry(e, struct file_fd, file_fd_list_elem);
+	//	printf("fd: %d \n",filefd->fd);
+	//	e = list_next(e);
+	//}
+
 	for (e = list_begin(&filelist); e != list_end(&filelist);
 			e = list_next(e)) {
+		//	printf("cc !\n");
+		struct file_fd *filefd = list_entry(e, struct file_fd,
+				file_fd_list_elem);
+		if (filefd->fil == f) {
+			list_remove(&filefd->file_fd_list_elem);
+			return 0;
+		}
+	}
+	return -1;
+}
 
-		struct file_fd *filefd = list_entry(e, struct file_fd, file_fd_list_elem);
+struct file* get_file_from_fd(int fd2) {
+	//printf("called\n");
+
+	struct thread* t = thread_current();
+	struct list_elem *e;
+	struct list filelist = t->file_fd_list;
+	/*
+	 * if (list_empty(&filelist)) {
+	 printf("list empty 1 \n");
+	 }
+	 if (list_empty(&t->file_fd_list)) {
+	 printf("list empty 2\n");
+	 }
+	 printf("---\n");
+	 for (e = list_begin(&filelist); e != list_end(&filelist);
+	 e = list_next(e)) {
+	 printf("in here \n");
+	 if (e == &filelist.head) {
+	 printf("is haed  \n");
+	 }
+
+	 if (e == &filelist.tail) {
+	 printf("is tail  \n");
+	 }
+
+	 if (e == &filelist.head.next) {
+	 printf("is head  next\n");
+	 }
+
+	 if (e == &filelist.head.next->next) {
+	 printf("is head n n\n");
+	 }
+
+	 if (e == &filelist.tail.prev) {
+	 printf("is tail  prev\n");
+	 }
+
+	 if (e == &filelist.tail.prev->prev) {
+	 printf("is tail prev prev\n");
+	 }
+	 if (list_end(&filelist) != NULL && list_end(&filelist)->prev != NULL
+	 && list_end(&filelist)->next == NULL) {
+	 printf("list end is tail !\n");
+	 }
+	 if (e != NULL && e->prev != NULL && e->next == NULL) {
+	 printf("tail\n");
+	 }
+	 printf("ddd\n");
+	 if (e == NULL) {
+	 printf("not 1\n");
+	 }
+	 if (e->prev == NULL) {
+	 printf("not 2\n");
+	 }
+	 if (e->next == NULL) {
+	 printf("not 3\n");
+	 }
+	 printf("\n");
+	 }
+	 printf("------\n");*/
+
+	// printf("leng th %d\n",list_size(&filelist));
+	for (e = list_begin(&filelist); e != list_end(&filelist);
+			e = list_next(e)) {
+		//printf("next\n");
+		struct file_fd *filefd = list_entry(e, struct file_fd,
+				file_fd_list_elem);
 		if (filefd->fd == fd2) {
-		    return filefd->fil;
+			return filefd->fil;
 		}
 	}
 	return NULL;
@@ -794,48 +952,68 @@ int get_fd_from_file(struct file *file) {
 	for (e = list_begin(&filelist); e != list_end(&filelist);
 			e = list_next(e)) {
 
-		struct file_fd *filefd = list_entry(e, struct file_fd, file_fd_list_elem);
-			if (filefd->fil == file) {
+		struct file_fd *filefd = list_entry(e, struct file_fd,
+				file_fd_list_elem);
+		if (filefd->fil == file) {
 			return filefd->fd;
-	}
+		}
 	}
 	return -1;
 
 }
 
-void
-thread_add_child (struct thread * parent, tid_t child_id){
-  struct thread * child = get_thread_by_tid (child_id);
+struct thread *
+get_thread_by_tid(tid_t id) {
+	struct list_elem *e;
 
-  child -> parent = parent;
-  list_push_back (&parent -> children, &child->child);
+	for (e = list_begin(&all_list); e != list_end(&all_list);
+			e = list_next(e)) {
+		struct thread *t = list_entry(e, struct thread, allelem);
+		if (t->tid == id)
+			return t;
+	}
+
+	return NULL;
+}
+
+void thread_add_child(struct thread * parent, tid_t child_id) {
+	struct thread * child = get_thread_by_tid(child_id);
+
+	child->parent = parent;
+	list_push_back(&parent->children, &child->child);
 }
 
 struct return_status *
-thread_get_child_status(int cid){
-  struct return_status * rs_found;
-  struct thread * t = thread_current();
-  struct list_elem *e;
+thread_get_child_status(int cid) {
+	struct return_status * rs_found;
+	struct thread * t = thread_current();
+	struct list_elem *e;
 
-  for (e = list_begin (&t->children_return); e != list_end (&t->children_return); e = list_next (e))
-  {
-    rs_found = list_entry (e, struct return_status, elem);
-    if(rs_found -> tid == cid) return rs_found;
-  }
+	for (e = list_begin(&t->children_return);
+			e != list_end(&t->children_return); e = list_next(e)) {
+		rs_found = list_entry(e, struct return_status, elem);
+		if (rs_found->tid == cid)
+			return rs_found;
+	}
 
-    return NULL;
+	return NULL;
 }
 
-struct thread *
-get_thread_by_tid (tid_t id){
-  struct list_elem *e;
+struct return_status *
+thread_get_child_by_tid(int tid) {
+	struct thread * thread_found;
+	struct thread * current = thread_current();
+	struct list_elem *e;
 
-  for (e = list_begin (&all_list); e != list_end (&all_list);
-       e = list_next (e))
-    {
-      struct thread *t = list_entry (e, struct thread, allelem);
-      if( t -> tid == id) return t;
-    }
+	for (e = list_begin(&current->children);
+			e != list_end(&current->children); e = list_next(e)) {
+		thread_found = list_entry(e, struct thread, child);
+		if (thread_found->tid == tid)
+			return thread_found;
+	}
 
-    return NULL;
+	return NULL;
 }
+
+//#endif
+

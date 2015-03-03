@@ -152,8 +152,8 @@ kernel merely sets the interupt frame eax to 0xffffffff and copies the old value
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
   //ADDED
-  f->eip = f->eax;
-  f->eax = 0xffffffff;
+ // f->eip = f->eax;
+  //f->eax = 0xffffffff;
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to

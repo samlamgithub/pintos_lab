@@ -64,6 +64,8 @@ free_map_open (void)
 void
 free_map_close (void) 
 {
+	//printf("free map debug: %p \n",&free_map_file);
+	//printf("free map debug: %p \n",free_map_file);
   file_close (free_map_file);
 }
 

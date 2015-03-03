@@ -49,8 +49,13 @@ file_close (struct file *file)
   if (file != NULL)
     {
       file_allow_write (file);
+    //  printf("file debug \n");
       inode_close (file->inode);
+     // printf("file debug2 \n");
+      //printf("file locqation %p \n",file);
+      //printf("file locqation %p \n",&file);
       free (file); 
+    //  printf("file debug3 \n");
     }
 }
 

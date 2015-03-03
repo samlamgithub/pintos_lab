@@ -8,9 +8,10 @@
 
 >> Fill in the names and email addresses of your group members.
 
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
+Yuliya Gitlina <yuliya.gitlina13@imperial.ac.uk>
+Artem Kalikin <artem.kalikin13@imperial.ac.uk>
+Jiahao Lin <jiahao.lin13@imperial.ac.uk>
+Zhuofan Zhang <zhuofan.zhang13@imperial.ac.uk>
 
 ---- PRELIMINARIES ----
 
@@ -30,6 +31,19 @@ FirstName LastName <email@domain.example>
 >> Copy here the declaration of each new or changed `struct' or
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
+struct thread{
+
+    ...    //things we added in previous tasks
+    
+    // below are what we added in this task
+    struct semaphore * child_alive;     /* semaphore indicating that child have not died yet */
+    struct semaphore * child_loading;   /* semaphore indicating if the child is still loading*/
+
+    struct thread * parent;             /* parent of the thread */
+    struct list_elem child;             /* element of parent's list of children*/
+    struct list children;               /* children of the thread */
+    struct list children_return;        /* children statuses */
+}
 
 ---- ALGORITHMS ----
 
@@ -43,10 +57,28 @@ FirstName LastName <email@domain.example>
 >> A3: (5 marks)
 >> Why does Pintos implement strtok_r() but not strtok()?
 
+The strtok_r() function has one more argument "char **saveptr" than
+strtok(). What "char **saveptr" does is that it saves the address of 
+the first byte of the string. In other words, it maintains the string
+context. Hence, it allows successive calls that parse the same string.
+It also allows different strings to be parsed concurrently, by specifying
+different SAVEPTR argument. Since Pintos is a multi-thread system, 
+strtok_r() is more thread-safe and suitable.
+
 >> A4: (10 marks)
 >> In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
+
+Firstly, the approach of Unix-like systems is safer since the separation does 
+not take place directly in the kernel. Therefore, unsafe commands are identified 
+before arrival to kernel, which in turn simplifies kernel operations.
+
+Secondly, the code for separating commands in Unix-like systems is written in 
+shell. Hence, the operations associated with parsing user input will take place 
+in user space. That would make kernel space more secure as well as reduce the 
+amount of code written in it, thus, reducing complexity and generally making 
+code structure cleaner.
 
                  SYSTEM CALLS
                  ============
@@ -57,11 +89,46 @@ FirstName LastName <email@domain.example>
 >> Copy here the declaration of each new or changed `struct' or
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
+struct thread{
+
+    ...      //things we had in previous tasks
+    
+    // below are what we added in this task
+    int fd_distibution;
+	struct list file_fd_list;
+
+	int exit_status; // exit status of the thread
+
+ 
+}
+
+struct file_fd {
+   struct list_elem file_fd_list_elem;
+   struct file * fil;
+   int fd;
+};
+
+struct return_status
+  {
+    int tid;                            /* thread id */
+    int return_code;                    /* return code of the thread */
+    struct list_elem elem;
+  };
+
+
 
 >> B2: (5 marks)
 >> Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
+
+Every time a single file is opened, it returns a file descriptor(a non-negative
+integer) to the process which called open. If open is failed, it returns -1.
+If a single file is opened more than once, no matter it is opened by a single
+process or different processes, each open always returns a new file descriptor.
+Different file descriptors are closed independently and they do not share a file
+position. i.e., one file descriptor is associated with one open call.
+File descriptors are unique within the entire OS.
 
 ---- ALGORITHMS ----
 

@@ -52,6 +52,7 @@ fsutil_cat (char **argv)
       hex_dump (pos, buffer, n, true); 
     }
   palloc_free_page (buffer);
+  //printf("debug 3");
   file_close (file);
 }
 
@@ -137,6 +138,7 @@ fsutil_extract (char **argv UNUSED)
             }
 
           /* Finish up. */
+          //printf("debug 2");
           file_close (dst);
         }
     }
@@ -217,6 +219,7 @@ fsutil_append (char **argv)
   block_write (dst, sector, buffer + 1);
 
   /* Finish up. */
+  //printf("debug 1");
   file_close (src);
   free (buffer);
 }

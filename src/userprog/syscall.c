@@ -8,21 +8,23 @@
 #include "../lib/syscall-nr.h"
 #include "../lib/kernel/list.h"
 #include "process.h"
+#include "pagedir.h"
+#include "../filesys/filesys.h"
+#include "../devices/input.h"
+#include "../filesys/file.h"
+#include "../lib/kernel/stdio.h"
 
-/*
- * static struct lock filesys_lock;
+static struct lock filesys_lock;
 
-void lock_filesystem (void)
-{
-  if (!lock_held_by_current_thread (&filesys_lock))
-    lock_acquire (&filesys_lock);
+void lock_filesystem(void) {
+	if (!lock_held_by_current_thread(&filesys_lock))
+		lock_acquire(&filesys_lock);
 }
 
-void release_filesystem (void)
-{
-  if (lock_held_by_current_thread (&filesys_lock))
-    lock_release (&filesys_lock);
-}*/
+void release_filesystem(void) {
+	if (lock_held_by_current_thread(&filesys_lock))
+		lock_release(&filesys_lock);
+}
 
 typedef int pid_t;
 
@@ -32,6 +34,7 @@ static void syscall_handler(struct intr_frame *);
 
 void syscall_init(void) {
 	intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
+	lock_init(&filesys_lock);
 }
 
 void * check_accessing_user_memory(struct intr_frame * f) {
@@ -39,9 +42,12 @@ void * check_accessing_user_memory(struct intr_frame * f) {
 		exit(-1);
 		return NULL;
 	}
-	if (is_user_vaddr(f->esp)) {
-		if (pagedir_get_page(thread_current()->pagedir, f->esp+argu_num) != NULL) {
-			return pagedir_get_page(thread_current()->pagedir, f->esp+argu_num);
+	if (is_user_vaddr(f->esp + argu_num)) {
+		if (pagedir_get_page(thread_current()->pagedir,
+				f->esp + argu_num) != NULL) {
+			//printf("   addd:    %p\n", f->esp+argu_num);
+			return pagedir_get_page(thread_current()->pagedir,
+					f->esp + argu_num);
 		} else {
 			exit(-1);
 			return NULL;
@@ -53,13 +59,19 @@ void * check_accessing_user_memory(struct intr_frame * f) {
 }
 
 void * check_accessing_user_memory2(void *esp) {
+	//printf("   addd:    %p\n", esp);
 	if (is_user_vaddr(esp)) {
+		//printf("acces 2 success 1\n");
 		if (pagedir_get_page(thread_current()->pagedir, esp) != NULL) {
+			//printf("acces 2 success\n");
 			return pagedir_get_page(thread_current()->pagedir, esp);
 		} else {
+			exit(-1);
 			return NULL;
 		}
 	} else {
+		//printf("acces 2 fail\n");
+		exit(-1);
 		return NULL;
 	}
 }
@@ -67,70 +79,98 @@ void * check_accessing_user_memory2(void *esp) {
 void* get_argument(struct intr_frame *f) {
 	// check memory
 //	while (f->esp <= PHYS_BASE) {
-	printf("   address:    %p\n", f->esp+argu_num);
+	//printf("   address:    %p\n", f->esp+argu_num);
 	//	f->esp += 4;
 
 	//}
-	void * r = check_accessing_user_memory(f);
-	printf("   content:    %d\n", *(int *) r);
-		printf("  content2:    %s\n", (char *) r);
-		printf("  content3:    %p\n", r);
-		printf("  content4:    %s\n", (char *)check_accessing_user_memory2(r));
-	if (argu_num == 8){
-		printf("  content5:    %s\n\n", *(char***)r);
-		printf("  content6:    %s\n\n", (char *)*(int*)r);
-	}
-		argu_num += sizeof(int);
+	void *r = check_accessing_user_memory(f);
+	//printf("   content:    %d\n", *(int *) r);
+	//	printf("  content2:    %s\n", (char *) r);
+	//printf("  content3:    %p\n", r);
+	//	printf("  content4:    %s\n", (char *)check_accessing_user_memory2(r));
+	//if (argu_num == 8){
+	//	printf("  content5:    %s\n\n", *(char***)r);
+	//printf("  content6:    %s\n\n", (char *)*(int*)r);
+	//}
+	argu_num += sizeof(int);
 	return r;
 }
 
 static void syscall_handler(struct intr_frame *f UNUSED) {
-	printf("%s", "Called -----------------Sys handler\n");
-	printf("   address:    %p\n", f->esp);
+	//printf("%s", "Called -----------------Sys handler\n");
+	argu_num = 0;
+	//printf("   address:    %p\n", f->esp);
 //	printf("  abc is :    %s\n", check_accessing_user_memory2((void *) 0xbffffffc));
 //	printf("  echo is :    %s\n", check_accessing_user_memory2((void *) 0xbffffff7));
-	printf("  abc is :    %s\n", *(void **)(f->esp+8));
+//	printf("  abc is :    %s\n", *(void **)(f->esp+8));--------
 	//putbuf(f->esp+8, 4);
-	hex_dump(f->esp, f->esp, 200, 1);
+	//hex_dump(f->esp, f->esp, 200, 1);
 	//uint32_t *stack_pointer = f->esp;
 	uint32_t syscall_id = *(int*) get_argument(f);
-	printf("Sys call ID is %d \n", syscall_id);
+	//printf("Sys call ID is %d \n", syscall_id);
 	switch (syscall_id) {
 	case SYS_HALT:
 		halt();
 		break;
 	case SYS_EXIT:
-		exit(*((int *) get_argument(f)));
+		f->eax = exit(*((int *) get_argument(f)));
 		break;
 	case SYS_EXEC:
-		f->eax = exec((char *) get_argument(f));
+	{
+
+		char * real_buffer = (char *) check_accessing_user_memory2(
+						*(void **) get_argument(f));
+		f->eax = exec(real_buffer);
+	}
 		break;
 	case SYS_WAIT:
 		f->eax = wait(*(pid_t *) get_argument(f));
 		break;
 	case SYS_CREATE:
-		//f->eax = creat_file((char *) get_argument(f),
-		//		*((unsigned *) get_argument(f)));
+		//hex_dump(f->esp, f->esp, 200, 1);
+
+		//printf("  content2:    %s\n", (char *) fn);
+		//	printf("  content3:    %p\n", fn);
+	{
+		void * fn = get_argument(f);
+		unsigned size = *((unsigned *) get_argument(f));
+		f->eax = creat_file(fn, size);
+	}
 		break;
 	case SYS_REMOVE:
-		f->eax = remove((char *) get_argument(f));
+		f->eax = remove(get_argument(f));
 		break;
 	case SYS_OPEN:
-		f->eax = open((char *) get_argument(f));
+		f->eax = open(get_argument(f));
 		break;
 	case SYS_FILESIZE:
 		f->eax = filesize(*((int *) get_argument(f)));
 		break;
-	case SYS_READ:
-		f->eax = read(*(int *) get_argument(f), get_argument(f),
-				*(unsigned *) get_argument(f));
+	case SYS_READ: {
+		int fd = *(int *) get_argument(f);
+		//printf("fd: %d\n", fd);
+		char * real_buffer = (char *) check_accessing_user_memory2(
+				*(void **) get_argument(f));
+		//printf("buffer: %s\n", (char*) real_buffer);
+		unsigned size = *(unsigned *) get_argument(f);
+		//printf("size: %d\n", size);
+		f->eax = read(fd, real_buffer, size);
+		//printf("size read: %d\n", f->eax);
+		//printf("buffer after read: %s\n", (char*) real_buffer);
+		//printf("size should be  read: %d\n", strlen((char*) real_buffer));
+	}
 		break;
-	case SYS_WRITE:
-		f->eax = write(*(int *) get_argument(f), *(void **)(get_argument(f)),
-				*(unsigned *) get_argument(f));
+	case SYS_WRITE: {
+		int fd = *(int *) get_argument(f);
+		char * real_buffer = (char *) check_accessing_user_memory2(
+				*(void **) get_argument(f));
+		unsigned size = *(unsigned *) get_argument(f);
+		f->eax = write(fd, real_buffer, size);
+	}
+		//printf("return: %d",f->eax);
 		break;
 	case SYS_SEEK:
-		f->eax = seek(*(int *) get_argument(f), *(unsigned *) get_argument(f));
+		seek(*(int *) get_argument(f), *(unsigned *) get_argument(f));
 		break;
 	case SYS_TELL:
 		f->eax = tell(*((int *) get_argument(f)));
@@ -138,166 +178,99 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 	case SYS_CLOSE:
 		close(*(int *) get_argument(f));
 		break;
-	 default:
-	            printf("%i\n", syscall_id);
-	            NOT_REACHED ();
+	default:
+		printf("NOT REACCHED %i\n", syscall_id);
+		NOT_REACHED ()
+		;
 	}
-	printf("system call!\n");
-	thread_exit();
+	//printf("system call!\n");
+	//thread_exit();
 }
 
 void halt() {
 	shutdown_power_off();
 }
 
-void exit(int status) {
+int exit(int status) {
 	/*Terminates the current user program, sending its exit status to the kernel. If the process's
 	 parent waits for it (see below), this is the status that will be returned. Conventionally, a
 	 status of 0 indicates success and nonzero values indicate errors.
 	 */
-	/* struct thread *exiting_thread = thread_current();
-
-  /* Print the terminating message
-  printf("%s: exit(%d)\n", exiting_thread->name, status);
-
-  /* Set some information about the child, for process_wait
-  struct thread *parent = exiting_thread->parent;
-  struct child_info *child = NULL;
-
-  struct list_elem *elem = list_tail (&parent->children);
-  while ((elem = list_prev (elem)) != list_head (&parent->children))
-    {
-      child = list_entry(elem, struct child_info, infoelem);
-      if (child->id == exiting_thread->tid)
-        break;
-    }
-
-  ASSERT (child != NULL);
-
-  lock_acquire (&parent->cond_lock);
-  child->has_exited = true;
-  child->return_status = status;
-  lock_release (&parent->cond_lock);
-
-  struct list_elem *e, *next;
-  for (e = list_begin (&exiting_thread->open_fds);
-       e != list_end (&exiting_thread->open_fds);
-       e = next)
-    {
-      struct fd *fd = list_entry (e, struct fd, elem);
-      next = list_next (e); /* Need to remember where we're going next, since
-                               close will remove itself from the list.
-      close (fd->fd);
-    }
-
-  struct hash_iterator i;
-  hash_first (&i, &exiting_thread->file_map);
-  while (hash_next (&i))
-    {
-      struct hash_elem *e = hash_cur (&i);
-      struct mapping *m = hash_entry (e, struct mapping, elem);
-
-      ASSERT (m != NULL);
-
-      munmap (m->mapid, false);
-    }
-  hash_clear (&exiting_thread->file_map, mapping_destroy);
-
-  thread_exit();*/
-	thread_current()->exit_st = status;
+	//printf(":::::::::: exit called with %d ::::::::::::\n", status);
+	thread_current()->exit_status = status;
+	struct list_elem *e;
+	struct file_fd *fh;
+	for (e = list_begin(&thread_current()->file_fd_list);
+			e != list_end(&thread_current()->file_fd_list); e = list_next(e)) {
+		fh = list_entry(e, struct file_fd, file_fd_list_elem);
+		close(fh->fd);
+	}
+	printf("%s: exit(%d)\n", thread_current()->name, status);
+	//printf("exit call thread exit \n");
 	thread_exit();
-	process_exit();
+	//printf(" thread exit return to exit\n");
+	//printf(":::::::::: exit return  with %d ::::::::::::\n", status);
+	return status;
+
 }
 
 pid_t exec(const char *cmd_line) {
+	//printf(" %s ", " ---exec called---\n");
 	/*Runs the executable whose name is given in cmd line, passing any given arguments, and
 	 returns the new process's program id (pid). Must return pid -1, which otherwise should not
 	 be a valid pid, if the program cannot load or run for any reason. Thus, the parent process
 	 cannot return from the exec until it knows whether the child process successfully loaded its
 	 executable. You must use appropriate synchronization to ensure this.*/
-	/**if (is_safe_user_ptr (cmd_line))
-    {
-      struct thread *current = thread_current ();
-
-      current->child_status = LOADING;
-      tid_t child_tid = process_execute (cmd_line);
-
-      lock_acquire (&current->cond_lock);
-      while (current->child_status == LOADING)
-        cond_wait (&current->child_waiter, &current->cond_lock);
-      lock_release (&current->cond_lock);
-
-      return (current->child_status == FAILED) ? -1 : child_tid;
-    }*/
-
-	return process_execute(cmd_line);
+	//printf("exe get calles ;;;;;;;;;;;;;;;;;\n");
+	lock_filesystem();
+	//printf("exec call process execute\n");
+	tid_t id = process_execute(cmd_line);
+	//printf(" process execute return to exec\n");
+	release_filesystem();
+	//printf("----exec return---- %d \n", id);
+	return id;
 }
 
 int wait(pid_t pid) {
-	/*
-	 * if (!pid direct child) { // direct child if call exec receive pid
-	 *   return -1;
-	 * }
-	 *
-	 * if (already waiting) {
-	 *  return -1;
-	 * }
-	 *
-	 *
-	 * get child_process = get_process_from_pid(pid);
-	 * if (isAlive(child_process)) {
-	 *   while (!terminate) {
-	 *
-	 *   }
-	 *   if (called exit()) {
-	 *    return get_exit_status(child_proess);
-	 *   } else {
-	 *   return -1;
-	 *   }
-	 *
-	 * } else {
-	 *
-	 *
-	 * }
-	 * */
-	return process_wait (pid);
+	//printf(" %s ", " ---wait called---\n");
+	//printf(" wait for id : %d \n", pid);
+	if (pid == -1) {
+		//printf(" ----wait return : -1 \n");
+		return -1;
+	}
+	int r = process_wait(pid);
+	//printf(" ----wait return : %d \n", r);
+	return r;
 }
 
-bool creat_file(const char *file, unsigned initial_size) {
+int creat_file(void *file, unsigned initial_size) {
 	/*Creates a new file called file initially initial size bytes in size. Returns true if successful, false
 	 otherwise. Creating a new file does not open it: opening the new file is a separate operation
 	 which would require a open system call.*/
-	/*if (is_safe_user_ptr (file))
-    {
-      lock_filesystem ();
-      bool status = filesys_create (file, initial_size);
-      release_filesystem ();
-      return status;
-    }*/
-	return filesys_create(file, initial_size);
+	lock_filesystem();
+	char * real_file = (char *) check_accessing_user_memory2(*(void **) file);
+	//printf(" real file %s\n",real_file);
+	//printf("%d\n",initial_size);
+	int filesys_cr = filesys_create(real_file, initial_size) ? 1 : 0;
+	//printf("%d\n",filesys_cr);
+	release_filesystem();
+	return filesys_cr;
 }
 
-int remove(const char *file) {
-	printf(" %s ", " ---remove called---\n");
+int remove(void *file) {
+	//printf(" %s ", " ---remove called---\n");
 	/*Deletes the file called file. Returns true if successful, false otherwise. A file may be removed
 	 regardless of whether it is open or closed, and removing an open file does not close it. See
 	 [Removing an Open File], page 36, for details.*/
-	/*if (is_safe_user_ptr (file))
-    {
-      lock_filesystem ();
-      bool status = filesys_remove (file);
-      release_filesystem ();
-      return status;
-    }*/
-	if (filesys_remove(file)) {
-		return 1;
-	} else {
-		return 0;
-	}
+	lock_filesystem();
+	char * real_file = (char *) check_accessing_user_memory2(*(void **) file);
+	int rem = filesys_remove(real_file);
+	release_filesystem();
+	return rem;
 }
 
-int open(const char *file) {
-	printf(" %s ", " ---open called---\n");
+int open(void *file) {
+	//printf(" %s ", " ---open called---\n");
 	/*Opens the file called file. Returns a nonnegative integer handle called a \file descriptor" (fd),
 	 or -1 if the file could not be opened.
 	 File descriptors numbered 0 and 1 are reserved for the console: fd 0 (STDIN_FILENO) is stan-
@@ -309,91 +282,99 @@ int open(const char *file) {
 	 When a single file is opened more than once, whether by a single process or different processes,
 	 each open returns a new file descriptor. Different file descriptors for a single file are closed
 	 independently in separate calls to close and they do not share a file position.*/
-	/* if (is_safe_user_ptr (filename))
-    {
-      lock_filesystem ();
 
-      struct file *open_file = filesys_open (filename);
-      if (open_file == NULL)
-        {
-          release_filesystem ();
-          return -1;
-        }
-
-      /* Allocate an fd.
-      struct fd_node *node = malloc (sizeof (struct fd_node));
-      if (node == NULL)
-        PANIC ("Failed to allocate memory for file descriptor node");
-
-      node->fd = next_fd++;
-      node->thread = thread_current ();
-      node->file = open_file;
-      hash_insert (&fd_hash, &node->hash_elem);
-
-      struct fd *fd = malloc (sizeof (struct fd));
-      if (fd == NULL)
-        PANIC ("Failed to allocate memory for file descriptor list node");
-      fd->fd = node->fd;
-
-      list_push_back (&thread_current ()->open_fds, &fd->elem);
-
-      release_filesystem ();
-      return node->fd;
-    }*/
-
-	struct file* newfile = filesys_open(file);
-	return 0;
+	lock_filesystem();
+	char * real_file = (char *) check_accessing_user_memory2(*(void **) file);
+	struct file* newfile = filesys_open(real_file);
+	release_filesystem();
+	if (newfile == NULL) {
+		return -1;
+	}
+	return add_file_to_thread(newfile);
 }
 
 int filesize(int fd) {
-	printf(" %s ", " ---file size called---\n");
+	//printf(" %s ", " ---file size called---\n");
 	/*turns the size, in bytes, of the file open as fd.**/
 
-	/*lock_filesystem ();
-  int length = file_length (fd_to_file (fd));
-  release_filesystem ();
-  return length;*/
-	return filesize(fd);
+	struct thread *t = thread_current();
+	struct file *f = get_file_from_fd(fd);
+	if (f == NULL)
+		exit(-1);
+	return file_length(f);
 }
 
 int read(int fd, void *buffer, unsigned size) {
-	printf(" %s ", " ---Read called---\n");
+	//printf(" %s ", " ---Read called---\n");
 	/*Reads size bytes from the file open as fd into buffer. Returns the number of bytes actually
 	 read (0 at end of file), or -1 if the file could not be read (due to a condition other than
 	 end of file). Fd 0 reads from the keyboard using input_getc(), which can be found in
 	 `src/devices/input.h'.*/
-	if (fd == 0) { // read from key board
+	//printf("read called \n");
+	struct thread * t = thread_current();
+	if (fd == 1) {
+		//printf(" %s ", "error\n");
+		exit(-1);
+		return -1;
+		//ERROR, try to read from std out
+	} else if (fd == 0) { // read from key board
+		//printf(" %s ", "read from key board\n");
 		int siz = 0;
+		lock_filesystem();
 		for (siz = 0; siz < size; siz++) {
 			*(uint8_t*) (buffer + size) = input_getc();
 		}
+		release_filesystem();
 		return size;
 	} else {
+		lock_filesystem();
+		//printf("leng th %d\n",list_size(&t->file_fd_list));
+		if (list_empty(&t->file_fd_list)) {
+			//printf("fd list empty -----\n");
+			release_filesystem();
+			exit(-1);
+			return -1;
+		}
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
 			struct inode *inod = file_get_inode(f);
 			struct file* newfile = file_open(inod);
 			if (newfile != NULL) {
+				//	printf("file length: %d\n", file_length(newfile));
 				int size_read = (int) file_read(newfile, buffer, size);
-				if (size_read == file_length(newfile)) {
-					return 0;
-				} else if (size_read == size) {
+				//printf("size read: %d\n", size_read);
+				if (size_read == size) {
+					file_close(newfile);
+					release_filesystem();
 					return size_read;
+				} else if (size_read == file_length(newfile)
+						&& size_read != size) {
+					file_close(newfile);
+					release_filesystem();
+					return 0;
 				} else {
+					file_close(newfile);
+					release_filesystem();
+					exit(-1);
 					return -1;
 				}
 			} else {
+				release_filesystem();
+				exit(-1);
 				return -1;
 			}
-			file_close(newfile);
+
 		} else {
+			printf("NULL -----\n");
+			release_filesystem();
+			exit(-1);
 			return -1;
 		}
 	}
 
 }
 
-int write(int fd, void *buffer, unsigned size) {
+int write(int fd, const void *buffer, unsigned size) {
 	/*Writes size bytes from buffer to the open file fd. Returns the number of bytes actually
 	 written, which may be less than size if some bytes could not be written.
 	 Writing past end-of-file would normally extend the file, but file growth is not implemented
@@ -403,36 +384,53 @@ int write(int fd, void *buffer, unsigned size) {
 	 one call to putbuf(), at least as long as size is not bigger than a few hundred bytes. (It is
 	 reasonable to break up larger buffers.) Otherwise, lines of text output by different processes
 	 may end up interleaved on the console, confusing both human readers and our grading scripts.*/
-
-	int temp = fd;
-	fd = size;
-	size = temp;
-
-	printf(" %s ", " ---Write called---\n");
-	printf("fd is %d \n", fd);
-	printf(" buffer is  %s\n", (char*)buffer);
-	printf(" size is %d \n", size);
-	if (fd == 1) { // to console
-		if (size < 100) {
-			printf("size is %d\n", size);
+	struct thread * t = thread_current();
+//printf(" %s ", " ---Write called---\n");
+//printf("fd is %d \n", fd);
+//printf(" buffer is  %s\n", (char*)buffer);
+//printf(" size is %d \n", size);
+	if (fd == 0) {
+		//ERROR trying to write to std in
+	} else if (fd == 1) { // to console
+		lock_filesystem();
+		int written = 0;
+		if (size < 200) {
+			//printf("puting... size is %d\n", size);
 			putbuf(buffer, size);
+			written = size;
 		} else {
-			putbuf(buffer, 100);
-			putbuf(buffer + 100, size - 100);
+			while (size > 200) {
+				putbuf((buffer + written), 200);
+				size -= 200;
+				written += 200;
+			}
+			putbuf((buffer + written), size);
+			written += size;
 		}
-		return size;
+		release_filesystem();
+		return written;
 	} else {
+		if (list_empty(&t->file_fd_list)) {
+			//printf("fd list empty -----\n");
+			release_filesystem();
+			exit(-1);
+			return -1;
+		}
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
+			lock_filesystem();
 			struct inode *inod = file_get_inode(f);
 			struct file* newfile = file_open(inod);
 			if (newfile != NULL) {
 				int size_wrote = file_write(newfile, buffer, size);
+				release_filesystem();
 				return size_wrote;
 			} else {
+				release_filesystem();
 				return 0;
 			}
 		} else {
+			exit(-1);
 			return 0;
 		}
 	}
@@ -446,54 +444,56 @@ void seek(int fd, unsigned position) {
 	 Pintos files have a fixed length until task 4 is complete, so writes past end of file will return
 	 an error.) These semantics are implemented in the file system and do not require any special
 	 effort in system call implementation.
-
-	 lock_filesystem ();
-  file_seek (fd_to_file (fd), position);
-  release_filesystem ();
 	 */
+
+	struct thread * t = thread_current();
+	struct file * f = get_file_from_fd(fd);
+	if (f == NULL)
+		exit(-1);
+
+	lock_filesystem();
+	file_seek(f, position);
+	release_filesystem();
 }
 
 int tell(int fd) {
 	/*Returns the position of the next byte to be read or written in open file fd, expressed in bytes
 	 from the beginning of the file.
-
-	  lock_filesystem ();
-  unsigned next = file_tell (fd_to_file (fd));
-  release_filesystem ();
-  return next;
 	 */
-	return 0;
+	struct thread * t = thread_current();
+	struct file * f = get_file_from_fd(fd);
+	if (f == NULL)
+		exit(-1);
+
+	lock_filesystem();
+	off_t position = file_tell(f);
+	release_filesystem();
+	return position;
 }
 
 void close(int fd) {
-	file_close(get_file_from_fd(fd));
 	/*Closes file descriptor fd. Exiting or terminating a process implicitly closes all its open file
 	 descriptors, as if by calling this function for each one.*/
-}
+//printf("close called \n");
+	struct thread * t = thread_current();
+//printf("leng th %d\n",list_size(&t->file_fd_list));
+	if (list_empty(&t->file_fd_list)) {
+		//printf("list empty\n");
+		exit(-1);
+	}
+	struct file * f = get_file_from_fd(fd);
+	if (f == NULL)
+		exit(-1);
 
-/**
- /* Reads a byte at user virtual address UADDR.
- UADDR must be below PHYS_BASE.
- Returns the byte value if successful, -1 if a segfault
- occurred.
- static int
- get_user (const uint8_t *uaddr)
- {
- int result;
- asm ("movl $1f, %0; movzbl %1, %0; 1:"
- : "=&a" (result) : "m" (*uaddr));
- return result;
- }
- /* Writes BYTE to user address UDST.
- UDST must be below PHYS_BASE.
- Returns true if successful, false if a segfault occurred.
- static bool
- put_user (uint8_t *udst, uint8_t byte)
- {
- int error_code;
- asm ("movl $1f, %0; movb %b2, %1; 1:"
- : "=&a" (error_code), "=m" (*udst) : "q" (byte));
- return error_code != -1;
- }
- */
+	lock_filesystem();
+//printf("leng th %d\n",list_size(&t->file_fd_list));
+	int x = delete_file_from_thread(f);      //Remove file from files table
+	if (x == -1) {
+		exit(-1);
+	}
+	file_close(f);      //Close file in the system
+//printf("leng th %d\n",list_size(&t->file_fd_list));
+
+	release_filesystem();
+}
 

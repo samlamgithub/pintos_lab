@@ -108,17 +108,16 @@ struct thread {
 	struct list file_fd_list;
 	/* MOVE TO USERPROG SECTION LATER */
 	int exit_status; // exit status of the thread
-
-    struct semaphore * child_alive;     /* smaphore indicating that child have not died yet */
-    struct semaphore * child_loading;   /* semaphore indicating if the child is still loading*/
-
-       struct thread * parent;             /* parent of the thread */
-          struct list_elem child;             /* element of parent's list of children*/
-          struct list children;               /* children of the thread */
-          struct list children_return;        /* children statuses */
-
+	struct semaphore child_alive; // semaphore to identify if the child thread is alive
+	struct semaphore child_loading; // semaphore to identify if the child is loading
+	struct thread * parent; /* parent of the thread */
+	struct list_elem child; /* element of parent's list of children*/
+	struct list children; /* children of the thread */
+	struct list children_return; /* children statuses */
+	struct file *exec_file;              // Executing file of this thread
+	bool load_good;
+	bool waited;                    //  this child thread has been waited for
 	// added
-
 
 	/* Owned by userprog/process.c. */
 	uint32_t *pagedir; /* Page directory. */
@@ -126,17 +125,15 @@ struct thread {
 	// added
 	// added
 
-
 	/* Owned by thread.c. */
 	unsigned magic; /* Detects stack overflow. */
 
 };
 
-
 struct file_fd {
-   struct list_elem file_fd_list_elem;
-   struct file * fil;
-   int fd;
+	struct list_elem file_fd_list_elem;
+	struct file * fil;
+	int fd;
 };
 
 /* If false (default), use round-robin scheduler.
@@ -187,16 +184,20 @@ void thread_set_nice(int);
 int thread_get_recent_cpu(void);
 int thread_get_load_avg(void);
 
+int add_file_to_thread(struct file* f);
+struct file* get_file_from_fd(int fd2);
+int delete_file_from_thread(struct file* f);
+struct return_status *
+thread_get_child_by_tid(int tid);
 //added
-void thread_add_child (struct thread *, tid_t);
-struct return_status * thread_get_child_status (int);
+void thread_add_child(struct thread *, tid_t);
+struct return_status * thread_get_child_status(int);
 
-struct return_status
-  {
-    int tid;                            /* thread id */
-    int return_code;                    /* return code of the thread */
-    struct list_elem elem;
-  };
+struct return_status {
+	int tid; /* thread id */
+	int return_code; /* return code of the thread */
+	struct list_elem elem;
+};
 
 //added
 

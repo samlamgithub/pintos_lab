@@ -37,6 +37,7 @@ filesys_init (bool format)
 void
 filesys_done (void) 
 {
+	//printf("file sys done\n");
   free_map_close ();
 }
 
