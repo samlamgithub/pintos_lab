@@ -51,6 +51,7 @@ tid_t process_execute(const char *file_name) {
 	//printf("creat ===========%d\n", tid);
 	if (tid == TID_ERROR) {
 		palloc_free_page(fn_copy);
+		return -1;
 	}
 
 	thread_add_child(thread_current(), tid);
@@ -265,7 +266,7 @@ int process_wait(tid_t child_tid UNUSED) {
 			}
 	int return_code = return_status->return_code;
 	list_remove(&return_status->elem);
-	//sema_up (&t->ret_sema);
+	sema_up (&child_thread->ret_sema);
 	child_thread->waited = true;
 	return return_code;
 }
@@ -284,7 +285,7 @@ void process_exit(void) {
 	file_close(cur->exec_file);
 	//file_allow_write(cur->exec_file);
 	//printf("exe file closed\n");
-	//sema_down (&cur->ret_sema);
+	sema_down (&cur->ret_sema);
 
 	/* Destroy the current process's page directory and switch back
 	 to the kernel-only page directory. */

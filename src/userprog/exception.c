@@ -159,7 +159,7 @@ kernel merely sets the interupt frame eax to 0xffffffff and copies the old value
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  if (not_present || (is_kernel_vaddr (fault_addr) && user))
+
      exit(-1);
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,

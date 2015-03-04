@@ -110,6 +110,7 @@ struct thread {
 	int exit_status; // exit status of the thread
 	struct semaphore child_alive; // semaphore to identify if the child thread is alive
 	struct semaphore child_loading; // semaphore to identify if the child is loading
+	struct semaphore ret_sema;
 	struct thread * parent; /* parent of the thread */
 	struct list_elem child; /* element of parent's list of children*/
 	struct list children; /* children of the thread */

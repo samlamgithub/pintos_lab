@@ -623,6 +623,7 @@ static void init_thread(struct thread *t, const char *name, int priority) {
 		//printf("initiating sema s\n");
 	sema_init(&t->child_alive,0);
 	sema_init(&t->child_loading,0);
+	sema_init(&t->ret_sema,0);
 	//printf("initiating sema s complete\n");
 	//printf("%d\n",list_size(&t->child_loading->waiters));
 	//	printf("%d\n",list_size(&t->child_alive->waiters));

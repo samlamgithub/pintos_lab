@@ -97,7 +97,7 @@ void* get_argument(struct intr_frame *f) {
 }
 
 static void syscall_handler(struct intr_frame *f UNUSED) {
-	//printf("%s", "Called -----------------Sys handler\n");
+	//printf("%s", "Called -----------------Sys handler \n");
 	argu_num = 0;
 	//printf("   address:    %p\n", f->esp);
 //	printf("  abc is :    %s\n", check_accessing_user_memory2((void *) 0xbffffffc));
@@ -115,11 +115,9 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 	case SYS_EXIT:
 		f->eax = exit(*((int *) get_argument(f)));
 		break;
-	case SYS_EXEC:
-	{
-
+	case SYS_EXEC: {
 		char * real_buffer = (char *) check_accessing_user_memory2(
-						*(void **) get_argument(f));
+				*(void **) get_argument(f));
 		f->eax = exec(real_buffer);
 	}
 		break;
@@ -150,7 +148,7 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		//printf("read called \n");
 		int fd = *(int *) get_argument(f);
 		//printf("fd: %d\n", fd);
-		char * real_buffer =(char *) check_accessing_user_memory2(
+		char * real_buffer = (char *) check_accessing_user_memory2(
 				*(void **) get_argument(f));
 		//printf("buffer: %s\n", (char*) real_buffer);
 		unsigned size = *(unsigned *) get_argument(f);
@@ -353,31 +351,29 @@ int read(int fd, void *buffer, unsigned size) {
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
 
-
 			//	printf("reading with %d  %p  %d\n",fd,buffer,size);
-				//file_seek(f, 0);
-				int l = file_length(f);
-		//	printf("file length: %d\n", l);
-				//			int	size_read = (int) file_read(f, buffer, l );
-					//		printf("size read long: %d\n", size_read);
-						//	printf("buffer read: long %s\n", buffer);
-							//file_seek(f, 260);
-				 int size_read = (int) file_read(f, buffer, size);
-				//printf("size read real: %d\n", size_read);
+			//file_seek(f, 0);
+			int l = file_length(f);
+			//	printf("file length: %d\n", l);
+			//			int	size_read = (int) file_read(f, buffer, l );
+			//		printf("size read long: %d\n", size_read);
+			//	printf("buffer read: long %s\n", buffer);
+			//file_seek(f, 260);
+			int size_read = (int) file_read(f, buffer, size);
+			//printf("size read real: %d\n", size_read);
 			//	printf("buffer after read: %s\n", (char*) buffer);
-				if (size_read == size) {
-					release_filesystem();
-					return size_read;
-				} else if (size_read == file_length(f)
-						&& size_read != size) {
-					release_filesystem();
-					return 0;
-				} else {
-					//printf("read exit -1 1 %d\n");
-					release_filesystem();
-					exit(-1);
-					return -1;
-				}
+			if (size_read == size) {
+				release_filesystem();
+				return size_read;
+			} else if (size_read == file_length(f) && size_read != size) {
+				release_filesystem();
+				return 0;
+			} else {
+				//printf("read exit -1 1 %d\n");
+				release_filesystem();
+				exit(-1);
+				return -1;
+			}
 
 		} else {
 			//printf("NULL -----\n");
@@ -470,9 +466,8 @@ void seek(int fd, unsigned position) {
 	struct file * f = get_file_from_fd(fd);
 	if (f == NULL) {
 		//printf("seek called but NULL\n ");
-			exit(-1);
+		exit(-1);
 	}
-
 
 	lock_filesystem();
 	//printf("seeking\n ");
