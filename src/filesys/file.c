@@ -74,8 +74,10 @@ file_get_inode (struct file *file)
 off_t
 file_read (struct file *file, void *buffer, off_t size) 
 {
+	//printf("Po: %d \n", file->pos);
   off_t bytes_read = inode_read_at (file->inode, buffer, size, file->pos);
   file->pos += bytes_read;
+ // printf("Po2: %d \n", file->pos);
   return bytes_read;
 }
 
@@ -100,8 +102,10 @@ file_read_at (struct file *file, void *buffer, off_t size, off_t file_ofs)
 off_t
 file_write (struct file *file, const void *buffer, off_t size) 
 {
+	//printf(" write Po: %d \n", file->pos);
   off_t bytes_written = inode_write_at (file->inode, buffer, size, file->pos);
   file->pos += bytes_written;
+ // printf("write Po 2: %d \n", file->pos);
   return bytes_written;
 }
 
@@ -163,7 +167,9 @@ file_seek (struct file *file, off_t new_pos)
 {
   ASSERT (file != NULL);
   ASSERT (new_pos >= 0);
+ // printf("Po seek 1: %d \n", file->pos);
   file->pos = new_pos;
+ // printf("Po:seek 2 %d \n", file->pos);
 }
 
 /* Returns the current position in FILE as a byte offset from the

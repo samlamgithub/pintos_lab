@@ -150,14 +150,15 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		//printf("read called \n");
 		int fd = *(int *) get_argument(f);
 		//printf("fd: %d\n", fd);
-		char * real_buffer = (char *) check_accessing_user_memory2(
+		char * real_buffer =(char *) check_accessing_user_memory2(
 				*(void **) get_argument(f));
 		//printf("buffer: %s\n", (char*) real_buffer);
 		unsigned size = *(unsigned *) get_argument(f);
 		//printf("size: %d\n", size);
 		f->eax = read(fd, real_buffer, size);
 		//printf("size read: %d\n", f->eax);
-		//printf("buffer after read: %s\n", (char*) real_buffer);
+		//write(1, real_buffer, size);
+
 		//printf("size should be  read: %d\n", strlen((char*) real_buffer));
 	}
 		break;
@@ -167,6 +168,7 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		char * real_buffer = (char *) check_accessing_user_memory2(
 				*(void **) get_argument(f));
 		unsigned size = *(unsigned *) get_argument(f);
+		//printf("fd %d rb %s s %d\n",fd, real_buffer, size);
 		f->eax = write(fd, real_buffer, size);
 		//printf(" write return: %d \n",f->eax);
 	}
@@ -351,10 +353,18 @@ int read(int fd, void *buffer, unsigned size) {
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
 
-				//printf("file length: %d\n", file_length(f));
-				//printf("reading with %d",fd);
-				int size_read = (int) file_read(f, buffer, size);
-				//printf("size read: %d\n", size_read);
+
+			//	printf("reading with %d  %p  %d\n",fd,buffer,size);
+				//file_seek(f, 0);
+				int l = file_length(f);
+		//	printf("file length: %d\n", l);
+				//			int	size_read = (int) file_read(f, buffer, l );
+					//		printf("size read long: %d\n", size_read);
+						//	printf("buffer read: long %s\n", buffer);
+							//file_seek(f, 260);
+				 int size_read = (int) file_read(f, buffer, size);
+				//printf("size read real: %d\n", size_read);
+			//	printf("buffer after read: %s\n", (char*) buffer);
 				if (size_read == size) {
 					release_filesystem();
 					return size_read;
@@ -424,11 +434,11 @@ int write(int fd, const void *buffer, unsigned size) {
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
 			lock_filesystem();
-			struct inode *inod = file_get_inode(f);
-			struct file* newfile = file_open(inod);
-			if (newfile != NULL) {
+			if (f != NULL) {
 				//printf("writing ing \n");
-				int size_wrote = file_write(newfile, buffer, size);
+				//printf("writing with %d  %p  %d\n",fd,buffer,size);
+				int size_wrote = file_write(f, buffer, size);
+				//write(1,buffer,size);
 				//printf("wrtoe : %d\n", size_wrote);
 				release_filesystem();
 				return size_wrote;
@@ -466,6 +476,7 @@ void seek(int fd, unsigned position) {
 
 	lock_filesystem();
 	//printf("seeking\n ");
+	//printf("seeking with %d  %d\n",fd,position);
 	file_seek(f, position);
 	release_filesystem();
 }
