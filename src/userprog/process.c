@@ -28,9 +28,6 @@ static bool load(const char *cmdline, void (**eip)(void), void **esp,
  thread id, or TID_ERROR if the thread cannot be created. */
 tid_t process_execute(const char *file_name) {
 	//printf("enter process execute : %s\n", file_name);
-	//if (&thread_current()->child_loading != NULL) {
-		//printf("sema not NULL\n");
-	//}
 
 	char *fn_copy;
 	char *rest;
@@ -103,15 +100,12 @@ static void start_process(void *file_name_) {
 		//printf("paren t %d\n", cur->parent->tid);
 		cur->parent->load_good = success;
 		//printf("ready child loading sema uped\n");
-		//if (&cur->parent->child_loading != NULL) {
-		//	printf("sema not NULL\n");
-		//}
 		sema_up(&cur->parent->child_loading);
 		//printf("child loading sema uped 2\n");
 	}
 	if (success) {
 		//printf("exe file closinmg: %d\n", thread_current()->tid);
-	     cur->exec_file = filesys_open(exec_file_name);
+		cur->exec_file = filesys_open(exec_file_name);
 		file_deny_write(cur->exec_file);
 	} else {
 		palloc_free_page(file_name);
@@ -241,33 +235,41 @@ int process_wait(tid_t child_tid UNUSED) {
 
 	struct thread *child_thread = thread_get_child_by_tid(child_tid);
 
-	if (child_thread == NULL || child_thread->waited) {
-		//if (child_thread == NULL) {
-			//printf("child thread null\n");
-		//}
-		//if (child_thread->waited) {
-					//printf("child thread waited\n");
-				//}
-		//printf(
-		//		"child thread not found or already waited for the thread, process wait return -1\n");
-		return -1;	//we are already waiting for this thread
+	if (child_thread == NULL) {
+		struct return_status *return_status = thread_get_child_status(
+				child_tid);
+		if (return_status != NULL) {
+			return return_status->return_code;
+		} else {
+			//printf("process wait exit can't find -1\n");
+			return -1;
+		}
 	}
 
-	//printf("child id :%d \n",child_thread->tid);
-	//if(NULL==(&child_thread->child_alive)) {
-	//	printf("NULLL\n");
-	//}
-	sema_down(&child_thread->child_alive); // wait for child to exit
+	if (child_thread->waited) {
+		//printf("process wait waited return -1\n");
+		return -1;
+	}
 
-	struct return_status *return_status = thread_get_child_status(child_tid);
+	//printf("actually waiting \n");
+	//printf("process wait downing alive\n");
+	sema_down(&child_thread->child_alive); // wait for child to exit
+	//printf("process wait downed alive \n");
+
+	struct return_status * return_status = thread_get_child_status(child_tid);
 	if (return_status == NULL) {
-				//printf("NULLL\n");
-				return -1;
-			}
+		//printf("process wait exit -1 , can;t get return status\n");
+		return -1;
+	}
 	int return_code = return_status->return_code;
-	list_remove(&return_status->elem);
-	sema_up (&child_thread->ret_sema);
+	//printf("process wait got return code::: %d\n", return_code);
+	list_remove(&return_status->returnelem);
 	child_thread->waited = true;
+	//printf("process wait uping 1 ret\n");
+	//sema_down(&child_thread->ret_sema);
+	//printf("process wait uped  1ret\n");
+	
+	//printf(" process wait for %d returning with %d \n", child_tid,return_code);
 	return return_code;
 }
 
@@ -276,17 +278,17 @@ void process_exit(void) {
 	//printf("enter process exit \n");
 	struct thread *cur = thread_current();
 	uint32_t *pd;
-//
-	//printf("enter process exit id :%d \n",cur->tid);
-	sema_up(&cur->child_alive);
-	//printf("child alive sema uped\n");
-	//printf("exe file closinmg: %d\n", cur->exec_file->deny_write);
-	//printf("exe file closinmg: %d\n", thread_current()->tid);
-	file_close(cur->exec_file);
-	//file_allow_write(cur->exec_file);
-	//printf("exe file closed\n");
-	sema_down (&cur->ret_sema);
+	//printf("process exit uping  alive\n");
+	//if (cur->parent != NULL) {
+		sema_up(&cur->child_alive);
+	//}
+	//printf("process exit uped  alive\n");
 
+	file_close(cur->exec_file);
+ 
+	//printf("process exit downing ret 2\n");
+	//sema_up(&cur->ret_sema);
+	//printf("process exit downed ret 2\n");
 	/* Destroy the current process's page directory and switch back
 	 to the kernel-only page directory. */
 	pd = cur->pagedir;
@@ -302,8 +304,9 @@ void process_exit(void) {
 		pagedir_activate(NULL);
 		pagedir_destroy(pd);
 	}
+	
 
-	//printf("process exit returning\n");
+	//printf("process exit returning tid: %d\n",thread_current()->tid);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -311,7 +314,6 @@ void process_exit(void) {
  This function is called on every context switch. */
 void process_activate(void) {
 	struct thread *t = thread_current();
-
 	/* Activate thread's page tables. */
 	pagedir_activate(t->pagedir);
 

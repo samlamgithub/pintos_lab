@@ -103,7 +103,7 @@ struct thread {
 	int64_t nice;                            // niceness advanced scheduler
 	int32_t recent_cpu;                      // recent cpu advanced scheduler
 	struct list_elem alive_list_elem;   //list element for list of alive threads
-#ifdef USERPROG
+/#ifdef USERPROG
 	int fd_distibution;
 	struct list file_fd_list;
 	int exit_status; // exit status of the thread

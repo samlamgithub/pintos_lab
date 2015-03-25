@@ -14,8 +14,6 @@
 #include "../filesys/file.h"
 #include "../lib/kernel/stdio.h"
 
-static struct lock filesys_lock;
-
 void lock_filesystem(void) {
 	if (!lock_held_by_current_thread(&filesys_lock))
 		lock_acquire(&filesys_lock);
@@ -114,6 +112,7 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		break;
 	case SYS_EXIT:
 		f->eax = exit(*((int *) get_argument(f)));
+		//printf("exit returned\n");
 		break;
 	case SYS_EXEC: {
 		char * real_buffer = (char *) check_accessing_user_memory2(
@@ -123,13 +122,10 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		break;
 	case SYS_WAIT:
 		f->eax = wait(*(pid_t *) get_argument(f));
+		printf(" debug wait 3\n");
+		//printf("wait returned\n");
 		break;
-	case SYS_CREATE:
-		//hex_dump(f->esp, f->esp, 200, 1);
-
-		//printf("  content2:    %s\n", (char *) fn);
-		//	printf("  content3:    %p\n", fn);
-	{
+	case SYS_CREATE: {
 		void * fn = get_argument(f);
 		unsigned size = *((unsigned *) get_argument(f));
 		f->eax = creat_file(fn, size);
@@ -207,19 +203,13 @@ int exit(int status) {
 	 parent waits for it (see below), this is the status that will be returned. Conventionally, a
 	 status of 0 indicates success and nonzero values indicate errors.
 	 */
-	//printf(":::::::::: exit called with %d ::::::::::::\n", status);
+	//printf("::::::::::thread %d exit called with %d ::::::::::::\n",
+		//	thread_current()->tid, status);
 	thread_current()->exit_status = status;
-	struct list_elem *e;
-	struct file_fd *fh;
-	for (e = list_begin(&thread_current()->file_fd_list);
-			e != list_end(&thread_current()->file_fd_list); e = list_next(e)) {
-		fh = list_entry(e, struct file_fd, file_fd_list_elem);
-		close(fh->fd);
-	}
-	printf("%s: exit(%d)\n", thread_current()->name, status);
+	printf("%s: exit(%d),%d,\n", thread_current()->name,thread_current()->tid, status);
 	///printf("exit call thread exit \n");
 	thread_exit();
-	//printf(" thread exit return to exit\n");
+	//printf(" :::::::::::::::::thread exit return to exit\n");
 	//printf(":::::::::: exit return  with %d ::::::::::::\n", status);
 	return status;
 
@@ -244,13 +234,16 @@ pid_t exec(const char *cmd_line) {
 
 int wait(pid_t pid) {
 	//printf(" %s ", " ---wait called---\n");
-	//printf(" wait for id : %d \n", pid);
+	printf("-debug wait 1----- %d waits for id : %d \n", thread_current()->tid, pid);
+	//printf(" debug wait 1\n");
 	if (pid == -1) {
-		//printf(" ----wait return : -1 \n");
+		//printf(" ----wait return error code: -1 \n");
 		return -1;
 	}
 	int r = process_wait(pid);
-	//printf(" ----wait return : %d \n", r);
+	printf(" debug wait 2\n");
+	//printf(" ---- %d waits for something return : %d \n", thread_current()->tid,
+		//	r);
 	return r;
 }
 
@@ -299,6 +292,7 @@ int open(void *file) {
 	struct file* newfile = filesys_open(real_file);
 	release_filesystem();
 	if (newfile == NULL) {
+		//printf("not getting file in open\n");
 		return -1;
 	}
 	int ret = add_file_to_thread(newfile);
@@ -313,7 +307,8 @@ int filesize(int fd) {
 	struct thread *t = thread_current();
 	struct file *f = get_file_from_fd(fd);
 	if (f == NULL)
-		exit(-1);
+		//printf("not getting file in file size\n");
+	exit(-1);
 	return file_length(f);
 }
 
@@ -343,14 +338,13 @@ int read(int fd, void *buffer, unsigned size) {
 		lock_filesystem();
 		//printf("leng th %d\n",list_size(&t->file_fd_list));
 		if (list_empty(&t->file_fd_list)) {
-			//printf("fd list empty -----\n");
+		//	printf("fd list empty -----\n");
 			release_filesystem();
 			exit(-1);
 			return -1;
 		}
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
-
 			//	printf("reading with %d  %p  %d\n",fd,buffer,size);
 			//file_seek(f, 0);
 			int l = file_length(f);
@@ -386,27 +380,15 @@ int read(int fd, void *buffer, unsigned size) {
 }
 
 int write(int fd, const void *buffer, unsigned size) {
-	/*Writes size bytes from buffer to the open file fd. Returns the number of bytes actually
-	 written, which may be less than size if some bytes could not be written.
-	 Writing past end-of-file would normally extend the file, but file growth is not implemented
-	 by the basic file system. The expected behavior is to write as many bytes as possible up to
-	 end-of-file and return the actual number written, or 0 if no bytes could be written at all.
-	 Fd 1 writes to the console. Your code to write to the console should write all of buffer in
-	 one call to putbuf(), at least as long as size is not bigger than a few hundred bytes. (It is
-	 reasonable to break up larger buffers.) Otherwise, lines of text output by different processes
-	 may end up interleaved on the console, confusing both human readers and our grading scripts.*/
 	struct thread * t = thread_current();
-//printf(" %s ", " ---Write called---\n");
-//printf("fd is %d \n", fd);
-//printf(" buffer is  %s\n", (char*)buffer);
-//printf(" size is %d \n", size);
+
 	if (fd == 0) {
-		//ERROR trying to write to std in
+		exit(-1);
+		return -1;
 	} else if (fd == 1) { // to console
 		lock_filesystem();
 		int written = 0;
 		if (size < 200) {
-			//printf("puting... size is %d\n", size);
 			putbuf(buffer, size);
 			written = size;
 		} else {
@@ -423,7 +405,7 @@ int write(int fd, const void *buffer, unsigned size) {
 	} else {
 		if (list_empty(&t->file_fd_list)) {
 			//printf("fd list empty -----\n");
-			release_filesystem();
+			//release_filesystem();
 			exit(-1);
 			return -1;
 		}
@@ -460,18 +442,13 @@ void seek(int fd, unsigned position) {
 	 an error.) These semantics are implemented in the file system and do not require any special
 	 effort in system call implementation.
 	 */
-
-	//printf("seek called\n ");
 	struct thread * t = thread_current();
 	struct file * f = get_file_from_fd(fd);
 	if (f == NULL) {
-		//printf("seek called but NULL\n ");
+		//printf("not getting file in seek\n");
 		exit(-1);
 	}
-
 	lock_filesystem();
-	//printf("seeking\n ");
-	//printf("seeking with %d  %d\n",fd,position);
 	file_seek(f, position);
 	release_filesystem();
 }
@@ -483,8 +460,8 @@ int tell(int fd) {
 	struct thread * t = thread_current();
 	struct file * f = get_file_from_fd(fd);
 	if (f == NULL)
-		exit(-1);
-
+		//printf("not getting file in tell\n");
+	exit(-1); // not getting file
 	lock_filesystem();
 	off_t position = file_tell(f);
 	release_filesystem();
@@ -492,28 +469,135 @@ int tell(int fd) {
 }
 
 void close(int fd) {
-	/*Closes file descriptor fd. Exiting or terminating a process implicitly closes all its open file
-	 descriptors, as if by calling this function for each one.*/
-//printf("close called \n");
-	struct thread * t = thread_current();
-//printf("leng th %d\n",list_size(&t->file_fd_list));
-	if (list_empty(&t->file_fd_list)) {
-		//printf("list empty\n");
-		exit(-1);
+	if (list_empty(&thread_current()->file_fd_list)) {
+		//printf("file list empty in close\n");
+		exit(-1); // no file to close
 	}
-	struct file * f = get_file_from_fd(fd);
-	if (f == NULL)
-		exit(-1);
-
-	lock_filesystem();
-//printf("leng th %d\n",list_size(&t->file_fd_list));
-	int x = delete_file_from_thread(f);      //Remove file from files table
-	if (x == -1) {
-		exit(-1);
+	struct file * f = delete_file_from_thread(fd);
+	if (f == NULL) {
+		//printf("not getting file in close\n");
+		exit(-1); // not getting file
+	} else {
+		lock_filesystem();
+		file_close(f);      //Close file in the system
+		release_filesystem();
 	}
-	file_close(f);      //Close file in the system
-//printf("leng th %d\n",list_size(&t->file_fd_list));
 
-	release_filesystem();
 }
+/*mapid_t mmap (int fd, void *addr) [System Call]
+Maps the le open as fd into the process's virtual address space. The entire le is mapped
+into consecutive virtual pages starting at addr.
+Your VM system must lazily load pages in mmap regions and use the mmaped le itself as
+backing store for the mapping. That is, evicting a page mapped by mmap writes it back to
+the le it was mapped from.
+If the le's length is not a multiple of PGSIZE, then some bytes in the nal mapped page
+\stick out" beyond the end of the le. Set these bytes to zero when the page is faulted in
+from the le system, and discard them when the page is written back to disk.
+If successful, this function returns a \mapping ID" that uniquely identies the mapping within
+the process. On failure, it must return -1, which otherwise should not be a valid mapping id,
+and the process's mappings must be unchanged.
+A call to mmap may fail if the le open as fd has a length of zero bytes. It must fail if addr is
+not page-aligned or if the range of pages mapped overlaps any existing set of mapped pages,
+including the stack or pages mapped at executable load time. It must also fail if addr is 0,
+because some Pintos code assumes virtual page 0 is not mapped. Finally, le descriptors 0
+and 1, representing console input and output, are not mappable.
+void munmap (mapid t mapping) [System Call]
+Unmaps the mapping designated by mapping, which must be a mapping ID returned by a
+previous call to mmap by the same process that has not yet been unmapped.*/
+
+/*
+// void mmap( int, void * ) - Mmaps a file with the given descriptor to the address in memory
+static void
+syscall_mmap (int *args, struct intr_frame *f UNUSED)
+{
+  struct thread * t = thread_current ();
+
+  if(args[1] == 0 || args[1] == 1){
+    f->eax = -1;
+    return;
+  }
+  struct file_handle * fh = thread_get_file (&t->files, args[1]);
+  if(fh == NULL) syscall_t_exit (t -> name, -1);
+
+  size_t fl = file_length (fh->file);
+  if(fl == 0 || args[2] == 0 || args[2] % PGSIZE > 0){
+    f->eax = -1;
+    return;
+  }
+
+  // Book the memory
+  int mmap_fd = thread_add_mmap_file (file_reopen (fh->file));
+  struct file_handle * mmap_fh = thread_get_file (&t->mmap_files, mmap_fd);
+
+  void * upage = (void*)args[2];
+  mmap_fh->upage = upage;
+  int pages = fl / PGSIZE;
+  if(fl % PGSIZE > 0){
+    pages++;
+  }
+
+  int i;
+  for(i = 0; i < pages; i++){
+    size_t zero_after = (i == pages - 1) ? fl % PGSIZE : PGSIZE;
+    off_t offset = i * PGSIZE;
+    struct suppl_page *new_page = new_file_page (mmap_fh->file, offset, zero_after, true, FILE);
+
+    sema_down (&t->pagedir_mod);
+    void * overlapControl = pagedir_get_page (t->pagedir, upage + offset);
+    sema_up (&t->pagedir_mod);
+
+    if(overlapControl != 0){
+      free (new_page);
+      f->eax = -1;
+      return;
+    }
+    sema_down (&t->pagedir_mod);
+    pagedir_set_page_suppl (t->pagedir, upage + offset, new_page);
+    sema_up (&t->pagedir_mod);
+  }
+
+  f->eax = mmap_fd;
+}
+/*
+// void munmap( mapid_t ) - Unmaps a file with the given descriptor
+static void
+syscall_munmap (int *args, struct intr_frame *f UNUSED)
+{
+  struct thread * t = thread_current ();
+  struct file_handle * fh = thread_get_file (&t->mmap_files, args[1]);
+  void * upage = fh->upage;
+  size_t fl = file_length (fh->file);
+  int pages = fl / PGSIZE;
+  if(fl % PGSIZE > 0){
+    pages++;
+  }
+
+  int i;
+  for(i = 0; i < pages; i++){
+    void * uaddr = upage + i*PGSIZE;
+    sema_down (&t->pagedir_mod);
+    bool dirty = pagedir_is_dirty (t->pagedir, uaddr);
+    void * kpage = pagedir_get_page(t->pagedir, uaddr);
+    sema_up (&t->pagedir_mod);
+    if(pg_ofs (kpage) == 0 && dirty) {
+      int zero_after = (i == pages - 1) ? fl%PGSIZE : PGSIZE;
+      file_seek (fh->file, i*PGSIZE);
+
+      frame_pin (uaddr, PGSIZE);
+
+      filesys_lock_acquire ();
+      file_write (fh->file, uaddr, zero_after);
+      filesys_lock_release ();
+
+      frame_unpin (uaddr, PGSIZE);
+    }
+    sema_down (&t->pagedir_mod);
+    pagedir_clear_page (t->pagedir, uaddr);
+    sema_up (&t->pagedir_mod);
+  }
+
+  list_remove (&fh->elem);
+  file_close (fh->file);
+  free (fh);
+}*/
 

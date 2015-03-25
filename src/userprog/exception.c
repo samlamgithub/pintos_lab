@@ -144,23 +144,20 @@ page_fault (struct intr_frame *f)
   /* Count page faults. */
   page_fault_cnt++;
 
-  /*Each of these functions assumes that the user address has already been verified to be below
-PHYS_BASE. They also assume that you’ve modified page_fault() so that a page fault in the
-kernel merely sets the interupt frame eax to 0xffffffff and copies the old value into eip.*/
 
   /* Determine cause. */
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
-  //ADDED
- // f->eip = f->eax;
-  //f->eax = 0xffffffff;
+
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-
+  printf("page falt called exit(-1), %d\n",thread_current()->tid);
      exit(-1);
+
+
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
