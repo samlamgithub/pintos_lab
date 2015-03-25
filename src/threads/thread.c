@@ -237,6 +237,7 @@ tid_t thread_create(const char *name, int priority, thread_func *function,
 	/* Initialize thread. */
 	init_thread(t, name, priority);
 	tid = t->tid = allocate_tid();
+  //printf("create 2 ===========%d\n",tid);
 
 	/* Prepare thread for first run by initializing its stack.
 	 Do this atomically so intermediate values for the 'stack'
@@ -271,6 +272,7 @@ tid_t thread_create(const char *name, int priority, thread_func *function,
 
 	list_push_back(&thread_list, &t->alive_list_elem); // we added
 	page_init(&t->page_table); //added
+	//printf("thread init  page table\n");
 	intr_set_level(old_level);
 
 	/* Add to run queue. */
@@ -341,6 +343,7 @@ tid_t thread_tid(void) {
 /* Deschedules the current thread and destroys it.  Never
  returns to the caller. */
 void thread_exit(void) {
+	//printf("%s", "Thread exit called!\n");
 	ASSERT(!intr_context());
 
 // #ifdef USERPROG
@@ -417,7 +420,9 @@ void thread_exit(void) {
 		free(fh);
 	}
 
+	//printf("thread exit call process exit \n");
 	process_exit();
+	//printf("process exit returned tid: %d\n", thread_current()->tid);
 
 // #endif
 
@@ -795,6 +800,7 @@ void thread_schedule_tail(struct thread *prev) {
 
 	if (prev != NULL && prev->status == THREAD_DYING
 			&& prev != initial_thread) {
+		//printf("distroy : %d, %d\n",prev->tid,thread_current()->tid);
 		ASSERT(prev != cur);
 		palloc_free_page(prev);
 	}
@@ -830,6 +836,7 @@ static tid_t allocate_tid(void) {
 	lock_acquire(&tid_lock);
 	tid = next_tid++;
 	lock_release(&tid_lock);
+	//printf("----------------------- allocate tid %d \n",tid);
 	return tid;
 }
 
@@ -878,6 +885,9 @@ struct file* get_file_from_fd(int fd2) {
 		struct file_fd *filefd = list_entry(e, struct file_fd,
 				file_fd_list_elem);
 		if (filefd->fd == fd2) {
+			if (filefd->fil == NULL) {
+				//printf("should not happen\n");
+			}
 			return filefd->fil;
 		}
 	}
@@ -891,6 +901,9 @@ struct file* get_file_from_fd_mmap(int fd2) {
 		struct file_fd *filefd = list_entry(e, struct file_fd,
 				file_fd_list_elem);
 		if (filefd->fd == fd2) {
+			if (filefd->fil == NULL) {
+				//printf("should not happen\n");
+			}
 			return filefd->fil;
 		}
 	}
@@ -904,6 +917,9 @@ struct file_fd* get_filefd_from_fd_mmap(int fd2) {
 		struct file_fd *filefd = list_entry(e, struct file_fd,
 				file_fd_list_elem);
 		if (filefd->fd == fd2) {
+			if (filefd->fil == NULL) {
+				//printf("should not happen\n");
+			}
 			return filefd;
 		}
 	}

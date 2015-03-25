@@ -28,10 +28,12 @@ static bool load(const char *cmdline, void (**eip)(void), void **esp,
  before process_execute() returns.  Returns the new process's
  thread id, or TID_ERROR if the thread cannot be created. */
 tid_t process_execute(const char *file_name) {
+	//printf("enter process execute : %s\n", file_name);
 
 	char *fn_copy;
 	char *rest;
 	tid_t tid;
+	//printf("proecess exe ===========%d\n", thread_current()->tid);
 	/* Make a copy of FILE_NAME.
 	 Otherwise there's a race between the caller and load(). */
 	fn_copy = palloc_get_page(0);
@@ -44,6 +46,7 @@ tid_t process_execute(const char *file_name) {
 	/* Create a new thread to execute FILE_NAME. */
 	tid = thread_create(exec_file_name, PRI_DEFAULT, start_process, fn_copy);
 
+	//printf("creat ===========%d\n", tid);
 	if (tid == TID_ERROR) {
 		palloc_free_page(fn_copy);
 		return -1;
@@ -52,15 +55,18 @@ tid_t process_execute(const char *file_name) {
 	thread_add_child(thread_current(), tid);
 
 	sema_down(&thread_current()->child_loading);
+	//printf("child loading sema downed\n");
 	if (!thread_current()->load_good) {
 		return -1;
 	}
+	//printf(" process execute returning with %d\n", tid);
 	return tid;
 }
 
 /* A thread function that loads a user process and starts it
  running. */
 static void start_process(void *file_name_) {
+	// printf("start process called\n");
 	char *file_name = file_name_;
 	struct intr_frame if_;
 	bool success;
@@ -93,6 +99,7 @@ static void start_process(void *file_name_) {
 
 	}
 	if (success) {
+		//printf("exe file closinmg: %d\n", thread_current()->tid);
 		cur->exec_file = filesys_open(exec_file_name);
 		file_deny_write(cur->exec_file);
 	} else {
@@ -124,10 +131,15 @@ static void start_process(void *file_name_) {
 
 	int i;
 	for (i = argc - 1; i >= 0; i--) {
+		//printf("%d\n", strlen(argument_list[i]) + 1);
+		//printf("%s\n", argument_list[i]);
 		int arg_length = strlen(argument_list[i]) + 1;
+		//printf("len is %d\n", arg_length);
 		if_.esp -= arg_length;
+		//printf(" address:    %p\n", if_.esp);
 		addresses[i] = if_.esp;
 		memcpy(((char *) if_.esp), argument_list[i], arg_length);
+		//printf("  content:    %s\n", (char *) if_.esp);
 	}
 
 	if_.esp -= 4;
@@ -140,20 +152,30 @@ static void start_process(void *file_name_) {
 
 	}
 
+//printf("%s\n", "----------------");
 	if_.esp -= 4; // address of head of arguments
 	char * c = if_.esp + 4;
 	memcpy(((char *) if_.esp), &c, sizeof(char *));
+//printf(" address:      %p\n", if_.esp);
+//printf("  content:     %p\n\n", *(char *) if_.esp);
 
+//printf("%s\n", "----------------");
 	if_.esp -= 4;
 	*((int *) if_.esp) = index; // index number
+//printf("   address:    %p\n", if_.esp);
+//printf("   content:    %d\n", *(int *) if_.esp);
 
+//printf("%s\n", "----------------");
 	if_.esp -= 4;
 	*((int *) if_.esp) = 0; // return address
+//printf("   address:    %p\n", if_.esp);
+//printf("    content:     %d\n", *(char *) if_.esp);
 
 	free(argument_list);
 	free(addresses);
 
 	palloc_free_page(file_name);
+	//printf("start process return \n");
 //ADDED
 
 	/* Start the user process by simulating a return from an
@@ -177,6 +199,7 @@ static void start_process(void *file_name_) {
  This function will be implemented in problem 2-2.  For now, it
  does nothing. */
 int process_wait(tid_t child_tid UNUSED) {
+	//printf("enter process wait with %d \n", child_tid);
 	struct thread *parent = thread_current();
 
 	struct thread *child_thread = thread_get_child_by_tid(child_tid);
@@ -187,36 +210,51 @@ int process_wait(tid_t child_tid UNUSED) {
 		if (return_status != NULL) {
 			return return_status->child_dead_status;
 		} else {
+			//printf("process wait exit can't find -1\n");
 			return -1;
 		}
 	}
 
 	if (child_thread->waited) {
+		//printf("process wait waited return -1\n");
 		return -1;
 	}
 
+	//printf("actually waiting \n");
+	//printf("process wait downing alive\n");
 	sema_down(&child_thread->child_alive); // wait for child to exit
+	//printf("process wait downed alive \n");
 
 	struct return_status * return_status = thread_get_child_status(child_tid);
 	if (return_status == NULL) {
+		//printf("process wait exit -1 , can;t get return status\n");
 		return -1;
 	}
 	int child_dead_status = return_status->child_dead_status;
+	//printf("process wait got return code::: %d\n", child_dead_status);
 	list_remove(&return_status->returnelem);
+	//printf("process wait uping  ret\n");
 	sema_down(&child_thread->ret_sema);
+	//printf("process wait uped  ret\n");
 	child_thread->waited = true;
+	//printf(" process wait for %d returning with %d \n", child_tid, child_dead_status);
 	return child_dead_status;
 }
 
 /* Free the current process's resources. */
 void process_exit(void) {
+///printf("enter process exit \n");
 	struct thread *cur = thread_current();
 	uint32_t *pd;
+	//printf("process exit uping  alive\n");
 	sema_up(&cur->child_alive);
+	//printf("process exit uped  alive\n");
 
 	file_close(cur->exec_file);
 
+	//printf("process exit downing ret \n");
 	sema_up(&cur->ret_sema);
+	//printf("process exit downed ret \n");
 	/* Destroy the current process's page directory and switch back
 	 to the kernel-only page directory. */
 	pd = cur->pagedir;
@@ -237,6 +275,7 @@ void process_exit(void) {
 		unlock_frames();
 	}
 
+	//printf("process exit returning tid: %d\n", thread_current()->tid);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -325,6 +364,7 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
  Returns true if successful, false otherwise. */
 bool load(const char *file_name, void (**eip)(void), void **esp,
 		char ** argument_list, int index) {
+	//printf("loading \n");
 	struct thread *t = thread_current();
 	struct Elf32_Ehdr ehdr;
 	struct file *file = NULL;
@@ -398,6 +438,7 @@ bool load(const char *file_name, void (**eip)(void), void **esp,
 					read_bytes = 0;
 					zero_bytes = ROUND_UP(page_offset + phdr.p_memsz, PGSIZE);
 				}
+				//printf("call load segment");
 				if (!load_segment(file, file_page, (void *) mem_page,
 						read_bytes, zero_bytes, writable))
 					goto done;
@@ -420,6 +461,7 @@ bool load(const char *file_name, void (**eip)(void), void **esp,
 	/* We arrive here whether the load is successful or not. */
 
 	file_close(file);
+	//printf("load return\n");
 	return success;
 }
 
@@ -487,6 +529,12 @@ static bool validate_segment(const struct Elf32_Phdr *phdr, struct file *file) {
  or disk read error occurs. */
 static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes, bool writable) {
+	//printf("load segment called  %p ,%d,%d \n", upage, read_bytes, zero_bytes);
+	if (writable) {
+		//printf("load segment writable \n");
+	} else {
+		//printf("load segment not writable \n");
+	}
 
 	ASSERT((read_bytes + zero_bytes) % PGSIZE == 0);
 	ASSERT(pg_ofs(upage) == 0);
@@ -495,6 +543,7 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 	off_t current_ofs = ofs;
 	char * name = thread_current()->name;
 	tid_t tid = thread_current()->tid;
+	//  printf("loading segment\n");
 	int i = 0;
 	while (read_bytes > 0 || zero_bytes > 0) {
 
@@ -503,13 +552,18 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 		// and zero the final PAGE_ZERO_BYTES bytes.
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE; //number of bytes read from executable this time
 		size_t page_zero_bytes = PGSIZE - page_read_bytes; // number of bytes in page need to be zeroed this time
+		//printf("load segment  %d,%d \n", page_read_bytes, page_zero_bytes);
 		if (page_read_bytes == PGSIZE) {
+		//	printf("frame get 2\n");
 			add_supp_page(
 					new_file_page(upage, writable, file, current_ofs,
 							page_read_bytes, writable));
+		//	printf("1 upage: %p\n", upage);
 		} else if (page_zero_bytes == PGSIZE) {
+		//	printf("2 upage: %p\n", upage);
 			add_supp_page(new_zero_page(upage, writable));
 		} else {
+			//printf("3 upage: %p\n", upage);
 			add_supp_page(
 					new_file_page(upage, writable, file, current_ofs,
 							page_read_bytes, writable));
@@ -521,7 +575,9 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 		upage += PGSIZE;
 		current_ofs += PGSIZE;
 		i++;
+		//printf("looping\n");
 	}
+	//printf("i: %d \n",i);
 	i = 0;
 	//file_seek(file, current_ofs);
 	return true;
@@ -533,6 +589,8 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 static bool setup_stack(void **esp) {
 	uint8_t *kpage;
 	bool success = false;
+//printf("setup stack\n");
+	//printf("frame get 1\n");
 	kpage = frame_get(((uint8_t *) PHYS_BASE) - PGSIZE, true, true); // set up initial stack
 	if (kpage != NULL) {
 		success = install_page(((uint8_t *) PHYS_BASE) - PGSIZE, kpage, // set mapping in pagedir
@@ -545,6 +603,7 @@ static bool setup_stack(void **esp) {
 			unlock_frames();
 		}
 	}
+	//printf("setup stack return\n");
 	return success;
 }
 

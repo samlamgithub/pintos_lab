@@ -156,15 +156,36 @@ void page_fault(struct intr_frame *f) {
 	write = (f->error_code & PF_W) != 0;
 	user = (f->error_code & PF_U) != 0;
 
+	//printf("page fault occured %p!\n", fault_page);
+	if (!not_present) {
+		//printf("present\n");
+	} else {
+		//printf("not present\n");
+	}
+	if (write) {
+		//printf("access to write\n");
+	} else {
+		//printf("access to read\n");
+	}
+	if (user) {
+		//printf("accessing user page\n");
+	} else {
+		//printf("accessing kernel page\n");
+	}
+	//ADDED
+
 	if (fault_addr == NULL) {
+		//printf("page fault! 0 exit null\n");
 		exit(-1);
 	}
 
 	if (is_kernel_vaddr(fault_addr)) {
+		//printf("page fault! 0 exit kernel\n");
 		exit(-1);
 	} // if trying to access kernel memory
 
 	if (not_present) {
+		//printf("page fault!\n");
 		bool syslock = false;
 		if (lock_held_by_current_thread(&filesys_lock)) {
 			lock_release(&filesys_lock);
@@ -181,18 +202,27 @@ void page_fault(struct intr_frame *f) {
 		while (hash_next(&i)) {
 			struct suppl_page *f = hash_entry(hash_cur(&i), struct suppl_page,
 					hash_elem);
-		}
+			 //printf("%p, ",f->upage);
+			if (f->frame_sourcefile != NULL) {
+				//printf("is file page\n");
+				//printf("%d, %d",f->frame_sourcefile->content_length,f->frame_sourcefile->file_offset);
 
+			}
+			//printf("\n");
+		}
+		//
 		struct hash_elem *elem = hash_find(&thread_current()->page_table,
 				&lpage->hash_elem);
 		free(lpage);
 		if (elem == NULL) {
 			if (is_stack_access(fault_addr, f->esp)) { //user)) { // is accessing stack
+				//printf("frame get 4\n");
 				void *kpage = frame_get(PAL_USER, fault_page, true);
 				pagedir_set_page(thread_current()->pagedir, fault_page, kpage,
 						true);
 				return;
 			} else {
+				//printf("page fault! not in s.p.t not stack access\n");
 				exit(-1);
 			}
 		}
@@ -200,6 +230,7 @@ void page_fault(struct intr_frame *f) {
 		struct suppl_page *spage = hash_entry(elem, struct suppl_page,
 				hash_elem);
 		if (!spage->writable && write) { // trying to write to read only page
+			//printf("page fault! 0 page read only\n");
 			exit(-1);
 		}
 		if (syslock)
@@ -208,8 +239,11 @@ void page_fault(struct intr_frame *f) {
 		bool writable = true;
 		bool dirty = false;
 		uint8_t *kpage = NULL;
+		//printf("frame get 3\n");
 		kpage = frame_get(fault_page, true, spage->writable); //get a frame in memory
+		//printf("=====kpage: %p\n", kpage);
 		if (spage->frame_sourcefile != NULL) { // is exec or file
+			//printf("exec or fil\n");
 			file_seek(spage->frame_sourcefile->filename,
 					spage->frame_sourcefile->file_offset);
 			int a;
@@ -223,20 +257,29 @@ void page_fault(struct intr_frame *f) {
 				frame_free(kpage);
 				unlock_frames();
 				free(br);
+				//printf("page fault! 2 read error\n");
 				exit(-1);
 			}
 			release_filesystem();
 			frame_pin_kernel(kpage, PGSIZE);
+			//printf("copying\n");
 			memcpy(kpage, br, PGSIZE);
 			frame_unpin_kernel(kpage, PGSIZE);
 			free(br);
 
 			memset(kpage + spage->frame_sourcefile->content_length, 0,
 			PGSIZE - spage->frame_sourcefile->content_length); // set zeros
-
+			if (spage->frame_sourcefile->writable) {
+				//printf("dealling writable 2\n");
+			} else {
+				//printf("dealling not writable2 \n");
+			}
+			//printf("=====a==hgegewe========\n");
 			frame_find_user(fault_page)->frame_sourcefile = spage->frame_sourcefile;
 
+			//printf("=====a===fwf=======\n");
 			writable = spage->frame_sourcefile->writable;
+			//printf("=====a==========\n");
 		} else if (spage->swap_slot != NULL) { // page in swap slot
 			// load data from swap slot to memory
 			frame_pin_kernel(kpage, PGSIZE);
@@ -246,6 +289,7 @@ void page_fault(struct intr_frame *f) {
 		} else if (spage->zeropage != NULL) {
 			memset(kpage, 0, PGSIZE);
 		}
+		//printf("=======bbb========\n");
 		sema_down(&t->sema_pagedir);
 		pagedir_clear_page(t->pagedir, fault_page);
 		if (!pagedir_set_page(t->pagedir, fault_page, kpage, writable)) { // register page to the process's address space.
@@ -253,12 +297,20 @@ void page_fault(struct intr_frame *f) {
 			lock_frames();
 			frame_free(kpage);
 			unlock_frames();
+			//printf("page fault! 4 set page error\n");
 			exit(-1);
 		}
 		pagedir_set_dirty(t->pagedir, fault_page, dirty);
 		pagedir_set_accessed(t->pagedir, fault_page, true);
 		sema_up(&t->sema_pagedir);
+		//printf("=======b========\n");
 	} else {
+		//printf("not not present exit -1\n");
+		if (write) {
+			//printf("access to write\n");
+		} else {
+			//printf("access to read\n");
+		}
 		exit(-1);
 	}
 
