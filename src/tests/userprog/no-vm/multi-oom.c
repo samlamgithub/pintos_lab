@@ -1,13 +1,17 @@
 /* Recursively executes itself until the child fails to execute.
    We expect that at least 30 copies can run.
+
    We count how many children your kernel was able to execute
    before it fails to start a new process.  We require that,
    if a process doesn't actually get to start, exec() must
    return -1, not a valid PID.
+
    We repeat this process 10 times, checking that your kernel
    allows for the same level of depth every time.
+
    In addition, some processes will spawn children that terminate
    abnormally after allocating some resources.
+
    Written by Godmar Back <godmar@gmail.com>
  */
 
@@ -52,8 +56,11 @@ consume_some_resources (void)
      A low-memory condition in open() should not lead to the
      termination of the process.  */
   for (fd = 0; fd < fdmax; fd++)
-    if (open (test_name) == -1)
-      break;
+    if (open (test_name) == -1) {
+msg ("fxxk -1.\n"); 
+     break;  
+}
+      
 }
 
 /* Consume some resources, then terminate this process
@@ -81,6 +88,7 @@ consume_some_resources_and_die (int seed)
 
       case 4:
         open ((char *)PHYS_BASE);
+msg("consumed\n");
         exit (-1);
 
       default:
@@ -94,6 +102,7 @@ consume_some_resources_and_die (int seed)
    that describes how many parent processes preceded them.
    Each process spawns one or multiple recursive copies of
    itself, passing 'depth+1' as depth.
+
    Some children are started with the '-k' flag, which will
    result in abnormal termination.
  */
@@ -103,6 +112,8 @@ main (int argc, char *argv[])
   int n;
 
   n = argc > 1 ? atoi (argv[1]) : 0;
+
+msg("n::  %d",n);
   bool is_at_root = (n == 0);
   if (is_at_root)
     msg ("begin");
@@ -140,22 +151,32 @@ main (int argc, char *argv[])
       child_pid = spawn_child (n + 1, RECURSE);
 
       /* If maximum depth is reached, return result. */
-      if (child_pid == -1)
+      if (child_pid == -1) {
+ msg("depth reached %d\n",n);
         return n;
+}
+        
 
       /* Else wait for child to report how deeply it was able to recurse. */
       int reached_depth = wait (child_pid);
-      if (reached_depth == -1)
-        fail ("wait returned -1.");
+       msg("waited depth reached %d, child %d \n",n,child_pid);
+      if (reached_depth == -1) {
+msg ("fxxk -1.\n");
+fail ("wait returned -1.");
+}
+        
 
       /* Record the depth reached during the first run; on subsequent
          runs, fail if those runs do not match the depth achieved on the
          first run. */
       if (i == 0)
         expected_depth = reached_depth;
-      else if (expected_depth != reached_depth)
+      else if (expected_depth != reached_depth) {
+msg ("fxxk -1.\n"); 
         fail ("after run %d/%d, expected depth %d, actual depth %d.",
               i, howmany, expected_depth, reached_depth);
+}
+
       ASSERT (expected_depth == reached_depth);
     }
 

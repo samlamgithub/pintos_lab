@@ -9,6 +9,8 @@
 #include "palloc.h"
 #include "switch.h"
 #include "vaddr.h"
+#include "userprog/pagedir.h"
+#include "userprog/syscall.h"
 #include "../lib/string.h"
 #include "fixed-point.h"
 #include "../devices/timer.h"
@@ -108,6 +110,7 @@ void thread_init(void) {
 	initial_thread->nice = 0;
 	initial_thread->recent_cpu = 0;
 	load_average = 0;
+
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -234,7 +237,6 @@ tid_t thread_create(const char *name, int priority, thread_func *function,
 	/* Initialize thread. */
 	init_thread(t, name, priority);
 	tid = t->tid = allocate_tid();
-//printf("create 2 ===========%d\n",tid);
 
 	/* Prepare thread for first run by initializing its stack.
 	 Do this atomically so intermediate values for the 'stack'
@@ -268,7 +270,7 @@ tid_t thread_create(const char *name, int priority, thread_func *function,
 	sf->ebp = 0;
 
 	list_push_back(&thread_list, &t->alive_list_elem); // we added
-
+	page_init(&t->page_table); //added
 	intr_set_level(old_level);
 
 	/* Add to run queue. */
@@ -339,47 +341,85 @@ tid_t thread_tid(void) {
 /* Deschedules the current thread and destroys it.  Never
  returns to the caller. */
 void thread_exit(void) {
-	printf("%s", "Thread exit called!\n");
 	ASSERT(!intr_context());
 
-#ifdef USERPROG
-
+// #ifdef USERPROG
 	struct list_elem *e;
 	struct file_fd * fh;
 	struct return_status * rs;
 
-    printf("%s", "debug 1\n");
-	while(!list_empty(&thread_current()->file_fd_list)) {
+	while (!list_empty(&thread_current()->file_fd_list)) {
 		e = list_pop_front(&thread_current()->file_fd_list);
 		fh = list_entry(e, struct file_fd, file_fd_list_elem);
 		file_close(fh->fil);
 		free(fh);
 	}
 
-	//for (e = list_begin(&thread_current()->file_fd_list);
-	//e != list_end(&thread_current()->file_fd_list); e = list_next(e)) {
-	//	free(fh);
-	//}
-printf("%s", "debug 2\n");
 	while (!list_empty(&thread_current()->children_return)) {
 		e = list_pop_front(&thread_current()->children_return);
 		rs = list_entry(e, struct return_status, returnelem);
 		free(rs);
 	}
-printf("%s", "debug 3\n");
+
 	if (thread_current()->parent != NULL) {
 		struct return_status * return_status = malloc(
 				sizeof(struct return_status));
 		return_status->tid = thread_current()->tid;
-		return_status->return_code = thread_current()->exit_status;
-		list_push_back(&thread_current()->parent->children_return, &return_status->returnelem);
+		return_status->child_dead_status = thread_current()->exit_status;
+		list_push_back(&thread_current()->parent->children_return,
+				&return_status->returnelem);
 	}
-printf("%s", "debug 4\n");
-	//printf("thread exit call process exit \n");
-	process_exit ();
-	printf("%s", "debug 5\n");
-	//printf("process exit returned tid: %d\n", thread_current()->tid);
-#endif
+
+	struct thread *current = thread_current();
+	// release memory mapped files
+	while (!list_empty(&current->mmap_file_list)) { // loop through
+		e = list_pop_front(&current->mmap_file_list); // take file elem out
+		fh = list_entry(e, struct file_fd, file_fd_list_elem); // take file handle out
+		void * file_startaddr = fh->userPage; // take user virtual page
+		printf("%p",file_startaddr);
+		int32_t fil_len = file_length(fh->fil); // take file length
+		int page_num = fil_len / PGSIZE; // number of pages needed to contains the file
+		if (fil_len % PGSIZE > 0) {
+			page_num++;
+		}
+		int i = 0;
+		for (i = 0; i < page_num; i++) { //loop though pages
+			int offset = i*PGSIZE; // offset from file start address
+			void * page_addr = file_startaddr + offset; // current user page address
+			sema_down(&current->sema_pagedir);
+			bool dirty = pagedir_is_dirty(current->pagedir, page_addr);
+			void * kpage = pagedir_get_page(current->pagedir, page_addr); // get kernel memory address
+			sema_up(&current->sema_pagedir);
+			if ((pg_ofs(kpage) == 0) && dirty) {
+				int write_length = (i == page_num - 1) ? fil_len % PGSIZE : PGSIZE; // get write back length
+				lock_filesystem();
+				file_seek(fh->fil, offset);
+				release_filesystem();
+
+				lock_frames();
+				frame_pin(page_addr, PGSIZE); // pin frame
+				unlock_frames();
+
+				lock_filesystem();
+				file_write(fh->fil, page_addr, write_length); // write page back to file
+				release_filesystem();
+
+				lock_frames();
+				frame_unpin(page_addr, PGSIZE); // unpin frame
+				unlock_frames();
+			}
+			sema_down(&current->sema_pagedir);
+			pagedir_clear_page(current->pagedir, page_addr);
+			sema_up(&current->sema_pagedir);
+		}
+
+		file_close(fh->fil);
+		free(fh);
+	}
+
+	process_exit();
+
+// #endif
 
 	/* Remove thread from all threads list, set our status to dying,
 	 and schedule another process.  That process will destroy us
@@ -628,7 +668,8 @@ static void init_thread(struct thread *t, const char *name, int priority) {
 	t->stack = (uint8_t *) t + PGSIZE;
 	t->priority = priority;
 
-#ifdef USERPROG
+//#ifdef USERPROG
+	sema_init(&t->sema_pagedir, 1);
 	sema_init(&t->child_alive, 0);
 	sema_init(&t->child_loading, 0);
 	sema_init(&t->ret_sema, 0);
@@ -636,10 +677,12 @@ static void init_thread(struct thread *t, const char *name, int priority) {
 	list_init(&t->children);
 	list_init(&t->file_fd_list);
 	list_init(&t->children_return);
+	list_init(&t->mmap_file_list);
 	t->fd_distibution = 2;
+	t->mmap_fd_distribution = 2;
 	t->load_good = false;
 	t->waited = false;
-#endif
+//#endif
 
 	t->magic = THREAD_MAGIC;
 
@@ -752,7 +795,6 @@ void thread_schedule_tail(struct thread *prev) {
 
 	if (prev != NULL && prev->status == THREAD_DYING
 			&& prev != initial_thread) {
-		//printf("distroy : %d, %d\n",prev->tid,thread_current()->tid);
 		ASSERT(prev != cur);
 		palloc_free_page(prev);
 	}
@@ -788,7 +830,6 @@ static tid_t allocate_tid(void) {
 	lock_acquire(&tid_lock);
 	tid = next_tid++;
 	lock_release(&tid_lock);
-	//printf("----------------------- allocate tid %d \n",tid);
 	return tid;
 }
 
@@ -796,7 +837,8 @@ static tid_t allocate_tid(void) {
  Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof(struct thread, stack);
 
-//#ifdef USERPROG
+// #ifdef USERPROG
+
 int distribute_fd() {
 	struct thread* t = thread_current();
 	int d = t->fd_distibution;
@@ -814,12 +856,9 @@ int add_file_to_thread(struct file* f) {
 }
 
 struct file* delete_file_from_thread(int fdd) {
-
 	struct list_elem *e;
-
 	for (e = list_begin(&thread_current()->file_fd_list);
 			e != list_end(&thread_current()->file_fd_list); e = list_next(e)) {
-
 		struct file_fd *filefd = list_entry(e, struct file_fd,
 				file_fd_list_elem);
 		if (filefd->fd == fdd) {
@@ -833,24 +872,41 @@ struct file* delete_file_from_thread(int fdd) {
 }
 
 struct file* get_file_from_fd(int fd2) {
-
 	struct list_elem *e;
-
 	for (e = list_begin(&thread_current()->file_fd_list);
 			e != list_end(&thread_current()->file_fd_list); e = list_next(e)) {
-
 		struct file_fd *filefd = list_entry(e, struct file_fd,
 				file_fd_list_elem);
 		if (filefd->fd == fd2) {
-
-			if (filefd->fil == NULL) {
-				//printf("should not happen\n");
-				return NULL;
-			}
 			return filefd->fil;
 		}
 	}
+	return NULL;
+}
 
+struct file* get_file_from_fd_mmap(int fd2) {
+	struct list_elem *e;
+	for (e = list_begin(&thread_current()->mmap_file_list);
+			e != list_end(&thread_current()->mmap_file_list); e = list_next(e)) {
+		struct file_fd *filefd = list_entry(e, struct file_fd,
+				file_fd_list_elem);
+		if (filefd->fd == fd2) {
+			return filefd->fil;
+		}
+	}
+	return NULL;
+}
+
+struct file_fd* get_filefd_from_fd_mmap(int fd2) {
+	struct list_elem *e;
+	for (e = list_begin(&thread_current()->mmap_file_list);
+			e != list_end(&thread_current()->mmap_file_list); e = list_next(e)) {
+		struct file_fd *filefd = list_entry(e, struct file_fd,
+				file_fd_list_elem);
+		if (filefd->fd == fd2) {
+			return filefd;
+		}
+	}
 	return NULL;
 }
 
@@ -869,8 +925,7 @@ int get_fd_from_file(struct file *file) {
 
 }
 
-struct thread *
-get_thread_by_tid(tid_t id) {
+struct thread * get_thread_by_tid(tid_t id) {
 	struct list_elem *e;
 
 	for (e = list_begin(&all_list); e != list_end(&all_list);
@@ -889,8 +944,7 @@ void thread_add_child(struct thread * parent, tid_t child_id) {
 	list_push_back(&parent->children, &child->child);
 }
 
-struct return_status *
-thread_get_child_status(int cid) {
+struct return_status * thread_get_child_status(int cid) {
 	struct return_status * rs_found;
 	struct list_elem *e;
 
@@ -917,5 +971,22 @@ struct thread *thread_get_child_by_tid(int tid) {
 	return NULL;
 }
 
-//#endif
+int distribute_mmap_fd() {
+	struct thread* t = thread_current();
+	int d = t->mmap_fd_distribution;
+	t->mmap_fd_distribution++;
+	return d;
+}
+
+int thread_add_mmap_file(struct file * file) {
+	struct file_fd * new_mmap_file_handle = malloc(sizeof(struct file_fd));
+	struct thread * t = thread_current();
+	new_mmap_file_handle->fd = distribute_mmap_fd();
+	new_mmap_file_handle->fil = file;
+	list_push_back(&t->mmap_file_list,
+			&new_mmap_file_handle->file_fd_list_elem);
+	return new_mmap_file_handle->fd;
+}
+
+// #endif
 

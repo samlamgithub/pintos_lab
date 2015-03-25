@@ -1,5 +1,4 @@
 #include <inttypes.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +16,8 @@
 #include "../lib/round.h"
 #include "../threads/loader.h"
 #include "../lib/stdio.h"
+#include "vm/frame.h"
+#include "vm/page.h"
 
 static thread_func start_process NO_RETURN;
 static bool load(const char *cmdline, void (**eip)(void), void **esp,
@@ -27,12 +28,10 @@ static bool load(const char *cmdline, void (**eip)(void), void **esp,
  before process_execute() returns.  Returns the new process's
  thread id, or TID_ERROR if the thread cannot be created. */
 tid_t process_execute(const char *file_name) {
-	//printf("enter process execute : %s\n", file_name);
 
 	char *fn_copy;
 	char *rest;
 	tid_t tid;
-	//printf("proecess exe ===========%d\n", thread_current()->tid);
 	/* Make a copy of FILE_NAME.
 	 Otherwise there's a race between the caller and load(). */
 	fn_copy = palloc_get_page(0);
@@ -45,7 +44,6 @@ tid_t process_execute(const char *file_name) {
 	/* Create a new thread to execute FILE_NAME. */
 	tid = thread_create(exec_file_name, PRI_DEFAULT, start_process, fn_copy);
 
-	//printf("creat ===========%d\n", tid);
 	if (tid == TID_ERROR) {
 		palloc_free_page(fn_copy);
 		return -1;
@@ -54,30 +52,23 @@ tid_t process_execute(const char *file_name) {
 	thread_add_child(thread_current(), tid);
 
 	sema_down(&thread_current()->child_loading);
-	//printf("child loading sema downed\n");
 	if (!thread_current()->load_good) {
 		return -1;
 	}
-	//printf(" process execute returning with %d\n", tid);
 	return tid;
 }
 
 /* A thread function that loads a user process and starts it
  running. */
 static void start_process(void *file_name_) {
-	//printf("enter start process  \n");
 	char *file_name = file_name_;
 	struct intr_frame if_;
 	bool success;
 	struct thread * cur = thread_current();
-	//printf("start ===========%d\n", cur->tid);
 	char *rest;
 	char *token;
 
-//printf("'%s'\n", "we added");
-//printf("'%s'\n", file_name);
 	int arguments_length = strlen(file_name) + 1;
-//printf("arguments length is %d\n", arguments_length);
 
 	char *exec_file_name = strtok_r(file_name, " ", &rest);
 
@@ -85,8 +76,7 @@ static void start_process(void *file_name_) {
 		exit(-1);
 		palloc_free_page(file_name);
 	}
-//printf("exec is %s \n", exec_file_name);
-//printf("length:   %d \n",strlen(exec_file_name)+1);
+
 	/* Initialize interrupt frame and load executable. */
 	memset(&if_, 0, sizeof if_);
 	if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -96,15 +86,13 @@ static void start_process(void *file_name_) {
 	success = load(exec_file_name, &if_.eip, &if_.esp, NULL, 0);
 
 	if (cur->parent != NULL) {
-		//printf("%d\n", cur->tid);
-		//printf("paren t %d\n", cur->parent->tid);
+
 		cur->parent->load_good = success;
-		//printf("ready child loading sema uped\n");
+
 		sema_up(&cur->parent->child_loading);
-		//printf("child loading sema uped 2\n");
+
 	}
 	if (success) {
-		//printf("exe file closinmg: %d\n", thread_current()->tid);
 		cur->exec_file = filesys_open(exec_file_name);
 		file_deny_write(cur->exec_file);
 	} else {
@@ -117,22 +105,18 @@ static void start_process(void *file_name_) {
 		PANIC("Out of memory, trying to alocate %d bytes.\n", arguments_length);
 	int argc = 0;
 	argument_list[argc++] = exec_file_name;
-	/* Due to carlessness of the user we can have multiple
-	 consecutive spaces which would break word alignment formula.
-	 Therefore we need to calculate the actual lenght of arguments*/
+
 	arguments_length = strlen(exec_file_name) + 1;
-//printf("arguments length is %d\n", arguments_length);
+
 	int index = 1;
 	while ((token = strtok_r(NULL, " ", &rest))) {
 		arguments_length += strlen(token) + 1;
-		//printf("arguments length is %d\n", arguments_length);
-		//printf("token length is %d\n", strlen(token)+1);
+
 		argument_list[argc++] = token;
 		index++;
-		//printf("'%s'\n", token);
+
 	}
-//printf("Indexx is %d\n", index);
-//printf("arguments_length is %d\n", arguments_length);
+
 	int **addresses = (int **) malloc(argc * sizeof(int *));
 	if (addresses == NULL)
 		PANIC("Out of memory, trying to alocate %d bytes.\n",
@@ -140,73 +124,36 @@ static void start_process(void *file_name_) {
 
 	int i;
 	for (i = argc - 1; i >= 0; i--) {
-		//printf("%d\n", strlen(argument_list[i]) + 1);
-		//printf("%s\n", argument_list[i]);
 		int arg_length = strlen(argument_list[i]) + 1;
-		//printf("len is %d\n", arg_length);
 		if_.esp -= arg_length;
-		//printf(" address:    %p\n", if_.esp);
 		addresses[i] = if_.esp;
 		memcpy(((char *) if_.esp), argument_list[i], arg_length);
-		//printf("  content:    %s\n", (char *) if_.esp);
 	}
 
-	/**
-	 int word_align_offset = arguments_length % 4;
-
-	 if_.esp -= word_align_offset != 0 ? 4 - word_align_offset : 0;
-	 **/
-	/* push 0 sentinel argument */
-//printf("%s\n", "----------------");
 	if_.esp -= 4;
 	*(int *) if_.esp = 0;
-//printf(" address:  %p\n", if_.esp);
-//printf("   content:   %d\n", *(char *) if_.esp);
-//printf("%s\n\n", "----------------");
 
-//printf(" argc: %d\n", argc);
 	for (i = argc - 1; i >= 0; i--) {
 		if_.esp -= 4;
-		//printf("   size: %d\n", sizeof(addresses[i]));
-		// memcpy(if_.esp, &addresses[i], sizeof(addresses[i]));
+
 		*(void **) (if_.esp) = addresses[i];
-		//printf("   address supposed :    %p\n", addresses[i]);
-		//printf("   address:    %p\n", if_.esp);
-		//printf("  content:     %p\n\n", *(char **) if_.esp);
+
 	}
 
-//printf("%s\n", "----------------");
 	if_.esp -= 4; // address of head of arguments
 	char * c = if_.esp + 4;
 	memcpy(((char *) if_.esp), &c, sizeof(char *));
-//printf(" address:      %p\n", if_.esp);
-//printf("  content:     %p\n\n", *(char *) if_.esp);
 
-//printf("%s\n", "----------------");
 	if_.esp -= 4;
 	*((int *) if_.esp) = index; // index number
-//printf("   address:    %p\n", if_.esp);
-//printf("   content:    %d\n", *(int *) if_.esp);
 
-//printf("%s\n", "----------------");
 	if_.esp -= 4;
 	*((int *) if_.esp) = 0; // return address
-//printf("   address:    %p\n", if_.esp);
-//printf("    content:     %d\n", *(char *) if_.esp);
 
 	free(argument_list);
 	free(addresses);
-//hex_dump(if_.esp-30, if_.esp-30, 100, 1);
-
-	if (PHYS_BASE - if_.esp >= 4096) {
-		exit(-1);
-
-	}
-
-//printf("%s\n", "----------------");
 
 	palloc_free_page(file_name);
-//ADDED
 //ADDED
 
 	/* Start the user process by simulating a return from an
@@ -230,7 +177,6 @@ static void start_process(void *file_name_) {
  This function will be implemented in problem 2-2.  For now, it
  does nothing. */
 int process_wait(tid_t child_tid UNUSED) {
-	//printf("enter process wait with %d \n", child_tid);
 	struct thread *parent = thread_current();
 
 	struct thread *child_thread = thread_get_child_by_tid(child_tid);
@@ -239,56 +185,38 @@ int process_wait(tid_t child_tid UNUSED) {
 		struct return_status *return_status = thread_get_child_status(
 				child_tid);
 		if (return_status != NULL) {
-			return return_status->return_code;
+			return return_status->child_dead_status;
 		} else {
-			//printf("process wait exit can't find -1\n");
 			return -1;
 		}
 	}
 
 	if (child_thread->waited) {
-		//printf("process wait waited return -1\n");
 		return -1;
 	}
 
-	//printf("actually waiting \n");
-	//printf("process wait downing alive\n");
 	sema_down(&child_thread->child_alive); // wait for child to exit
-	//printf("process wait downed alive \n");
 
 	struct return_status * return_status = thread_get_child_status(child_tid);
 	if (return_status == NULL) {
-		//printf("process wait exit -1 , can;t get return status\n");
 		return -1;
 	}
-	int return_code = return_status->return_code;
-	//printf("process wait got return code::: %d\n", return_code);
+	int child_dead_status = return_status->child_dead_status;
 	list_remove(&return_status->returnelem);
+	sema_down(&child_thread->ret_sema);
 	child_thread->waited = true;
-	//printf("process wait uping 1 ret\n");
-	//sema_down(&child_thread->ret_sema);
-	//printf("process wait uped  1ret\n");
-	
-	//printf(" process wait for %d returning with %d \n", child_tid,return_code);
-	return return_code;
+	return child_dead_status;
 }
 
 /* Free the current process's resources. */
 void process_exit(void) {
-	//printf("enter process exit \n");
 	struct thread *cur = thread_current();
 	uint32_t *pd;
-	//printf("process exit uping  alive\n");
-	//if (cur->parent != NULL) {
-		sema_up(&cur->child_alive);
-	//}
-	//printf("process exit uped  alive\n");
+	sema_up(&cur->child_alive);
 
 	file_close(cur->exec_file);
- 
-	//printf("process exit downing ret 2\n");
-	//sema_up(&cur->ret_sema);
-	//printf("process exit downed ret 2\n");
+
+	sema_up(&cur->ret_sema);
 	/* Destroy the current process's page directory and switch back
 	 to the kernel-only page directory. */
 	pd = cur->pagedir;
@@ -300,13 +228,15 @@ void process_exit(void) {
 		 directory before destroying the process's page
 		 directory, or our active page directory will be one
 		 that's been freed (and cleared). */
+		lock_frames();
+		sema_down(&cur->sema_pagedir);
 		cur->pagedir = NULL;
 		pagedir_activate(NULL);
-		pagedir_destroy(pd);
+		pagedir_destroy(pd); // destroy page directory
+		sema_up(&cur->sema_pagedir);
+		unlock_frames();
 	}
-	
 
-	//printf("process exit returning tid: %d\n",thread_current()->tid);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -485,10 +415,10 @@ bool load(const char *file_name, void (**eip)(void), void **esp,
 	*eip = (void (*)(void)) ehdr.e_entry;
 
 	success = true;
-//Execution of
+
 	done:
 	/* We arrive here whether the load is successful or not. */
-//printf("load close \n");
+
 	file_close(file);
 	return success;
 }
@@ -496,6 +426,7 @@ bool load(const char *file_name, void (**eip)(void), void **esp,
 /* load() helpers. */
 
 static bool install_page(void *upage, void *kpage, bool writable);
+static bool install_page_suppl(void *upage, struct suppl_page *page);
 
 /* Checks whether PHDR describes a valid, loadable segment in
  FILE and returns true if so, false otherwise. */
@@ -556,42 +487,45 @@ static bool validate_segment(const struct Elf32_Phdr *phdr, struct file *file) {
  or disk read error occurs. */
 static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes, bool writable) {
+
 	ASSERT((read_bytes + zero_bytes) % PGSIZE == 0);
 	ASSERT(pg_ofs(upage) == 0);
 	ASSERT(ofs % PGSIZE == 0);
 
-	file_seek(file, ofs);
+	off_t current_ofs = ofs;
+	char * name = thread_current()->name;
+	tid_t tid = thread_current()->tid;
+	int i = 0;
 	while (read_bytes > 0 || zero_bytes > 0) {
-		/* Calculate how to fill this page.
-		 We will read PAGE_READ_BYTES bytes from FILE
-		 and zero the final PAGE_ZERO_BYTES bytes. */
-		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
-		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* Get a page of memory. */
-		uint8_t *kpage = palloc_get_page(PAL_USER);
-		if (kpage == NULL)
-			return false;
-
-		/* Load this page. */
-		if (file_read(file, kpage, page_read_bytes) != (int) page_read_bytes) {
-			palloc_free_page(kpage);
-			return false;
-		}
-		memset(kpage + page_read_bytes, 0, page_zero_bytes);
-
-		/* Add the page to the process's address space. */
-		if (!install_page(upage, kpage, writable)) {
-			palloc_free_page(kpage);
-			return false;
+		///Calculate how to fill this page.
+		// We will read PAGE_READ_BYTES bytes from FILE
+		// and zero the final PAGE_ZERO_BYTES bytes.
+		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE; //number of bytes read from executable this time
+		size_t page_zero_bytes = PGSIZE - page_read_bytes; // number of bytes in page need to be zeroed this time
+		if (page_read_bytes == PGSIZE) {
+			add_supp_page(
+					new_file_page(upage, writable, file, current_ofs,
+							page_read_bytes, writable));
+		} else if (page_zero_bytes == PGSIZE) {
+			add_supp_page(new_zero_page(upage, writable));
+		} else {
+			add_supp_page(
+					new_file_page(upage, writable, file, current_ofs,
+							page_read_bytes, writable));
 		}
 
-		/* Advance. */
+		// Advance.
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
+		current_ofs += PGSIZE;
+		i++;
 	}
+	i = 0;
+	//file_seek(file, current_ofs);
 	return true;
+
 }
 
 /* Create a minimal stack by mapping a zeroed page at the top of
@@ -599,16 +533,18 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage,
 static bool setup_stack(void **esp) {
 	uint8_t *kpage;
 	bool success = false;
-
-	kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+	kpage = frame_get(((uint8_t *) PHYS_BASE) - PGSIZE, true, true); // set up initial stack
 	if (kpage != NULL) {
-		success = install_page(((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+		success = install_page(((uint8_t *) PHYS_BASE) - PGSIZE, kpage, // set mapping in pagedir
+				true);
 		if (success)
 			*esp = PHYS_BASE;
-		else
-			palloc_free_page(kpage);
+		else {
+			lock_frames();
+			frame_free(kpage);
+			unlock_frames();
+		}
 	}
-
 	return success;
 }
 

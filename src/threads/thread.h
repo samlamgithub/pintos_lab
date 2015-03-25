@@ -3,7 +3,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "../lib/debug.h"
+#include <hash.h>
 #include "../lib/kernel/list.h"
+#include "threads/synch.h"
+#include "filesys/file.h"
 
 #include "synch.h"
 /* States in a thread's life cycle. */
@@ -103,8 +106,9 @@ struct thread {
 	int64_t nice;                            // niceness advanced scheduler
 	int32_t recent_cpu;                      // recent cpu advanced scheduler
 	struct list_elem alive_list_elem;   //list element for list of alive threads
-#ifdef USERPROG
-	int fd_distibution;
+
+//#ifdef USERPROG
+	int fd_distibution; // count used to distribute normal file handle id
 	struct list file_fd_list;
 	int exit_status; // exit status of the thread
 	struct semaphore child_alive; // semaphore to identify if the child thread is alive
@@ -120,26 +124,37 @@ struct thread {
 	// added
 
 	// added in task 3
-	//struct hash page_table; // Pages hold by the thread
-	//struct semaphore pagedir_mod; 
-	//struct list mmap_files; /*  files mmaped by the process*/
-	//int next_mmap_fd;
+	void *esp;
+	struct hash page_table; // thread's supplemental page table
+	struct semaphore sema_pagedir; // semaphore to lock the modification on thread's pagedir
+	struct list mmap_file_list; //mmap file list
+	int mmap_fd_distribution; // count used to distribute memory map file handle id
 	// added in task 3
 
 	/* Owned by userprog/process.c. */
 	uint32_t *pagedir; /* Page directory. */
-#endif
+//#endif
 
 	/* Owned by thread.c. */
 	unsigned magic; /* Detects stack overflow. */
 
 };
 
+//added
 struct file_fd {
 	struct list_elem file_fd_list_elem;
 	struct file * fil;
 	int fd;
+	void* userPage;
 };
+
+struct return_status {
+	int tid;  // dead child id
+	int child_dead_status; // dead child return code
+	struct list_elem returnelem;
+};
+
+//added
 
 /* If false (default), use round-robin scheduler.
  If true, use multi-level feedback queue scheduler.
@@ -197,13 +212,14 @@ thread_get_child_by_tid(int tid);
 //added
 void thread_add_child(struct thread *, tid_t);
 struct return_status * thread_get_child_status(int);
-
-struct return_status {
-	int tid; /* thread id */
-	int return_code; /* return code of the thread */
-	struct list_elem returnelem;
-};
-
 //added
+
+// added in task 3
+int thread_add_mmap_file(struct file *);
+struct file* get_file_from_fd_mmap(int fd2);
+struct file_fd* get_filefd_from_fd_mmap(int fd2);
+// added in task 3
+
+
 
 #endif /* threads/thread.h */

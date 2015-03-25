@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "vm/page.h"
 
 uint32_t *pagedir_create (void);
 void pagedir_destroy (uint32_t *pd);

@@ -3,6 +3,7 @@
 #include "../threads/vaddr.h"
 #include "../lib/debug.h"
 #include "../threads/thread.h"
+#include "../threads/palloc.h"
 #include "../devices/shutdown.h"
 #include "../lib/stdio.h"
 #include "../lib/syscall-nr.h"
@@ -13,6 +14,7 @@
 #include "../devices/input.h"
 #include "../filesys/file.h"
 #include "../lib/kernel/stdio.h"
+#include "threads/pte.h"
 
 void lock_filesystem(void) {
 	if (!lock_held_by_current_thread(&filesys_lock))
@@ -22,6 +24,175 @@ void lock_filesystem(void) {
 void release_filesystem(void) {
 	if (lock_held_by_current_thread(&filesys_lock))
 		lock_release(&filesys_lock);
+}
+
+void dealling(void *fault_addr, struct intr_frame * f) {
+	//printf("delll2 access\n");
+	void * fault_page = (void *) (PTE_ADDR & (uint32_t) fault_addr);
+	bool syslock = false;
+	if (lock_held_by_current_thread(&filesys_lock)) {
+		lock_release(&filesys_lock);
+		syslock = true;
+	}
+
+	struct suppl_page *lpage = (struct suppl_page*) malloc(
+			sizeof(struct suppl_page));
+	lpage->upage = fault_page;
+	struct hash_elem *elem = hash_find(&thread_current()->page_table,
+			&lpage->hash_elem);
+	free(lpage);
+	if (elem == NULL) {
+		if (is_stack_access(fault_addr, f->esp)) { //user)) { // is accessing stack
+			//printf("frame get 4\n");
+			void *kpage = frame_get(PAL_USER, fault_page, true);
+			pagedir_set_page(thread_current()->pagedir, fault_page, kpage,
+			true);
+			return;
+		} else {
+			//printf("page fault! not in s.p.t not stack access\n");
+
+		}
+	}
+	// in supplemental page table
+	struct suppl_page *spage = hash_entry(elem, struct suppl_page, hash_elem);
+	if (!spage->writable) { // trying to write to read only page
+		//printf("page fault! 0 page read only\n");
+		//exit(-1);
+	}
+	if (syslock)
+		lock_acquire(&filesys_lock); //acquire syslock before fix
+
+	bool writable = true;
+	bool dirty = false;
+	uint8_t *kpage = NULL;
+	//printf("frame get 3\n");
+	kpage = frame_get(fault_page, true, spage->writable); //get a frame in memory
+	//printf("=====kpage: %p\n", kpage);
+	if (spage->frame_sourcefile != NULL) { // is exec or file
+		//printf("exec or fil\n");
+		file_seek(spage->frame_sourcefile->filename,
+				spage->frame_sourcefile->file_offset);
+		int a;
+		void * br = malloc(PGSIZE);
+
+		if ((a = file_read(spage->frame_sourcefile->filename, br,
+				spage->frame_sourcefile->content_length)) //read page from file into memory
+		!= (int) spage->frame_sourcefile->content_length) {
+			release_filesystem();
+			lock_frames();
+			frame_free(kpage);
+			unlock_frames();
+			free(br);
+			//printf("page fault! 2 read error\n");
+			exit(-1);
+		}
+		release_filesystem();
+		frame_pin_kernel(kpage, PGSIZE);
+		//printf("copying\n");
+		memcpy(kpage, br, PGSIZE);
+		frame_unpin_kernel(kpage, PGSIZE);
+		free(br);
+
+		memset(kpage + spage->frame_sourcefile->content_length, 0,
+		PGSIZE - spage->frame_sourcefile->content_length); // set zeros
+		if (spage->frame_sourcefile->writable) {
+			//printf("dealling writable 2\n");
+		} else {
+			//printf("dealling not writable2 \n");
+		}
+		//printf("=====a==hgegewe========\n");
+		frame_find_user(fault_page)->frame_sourcefile = spage->frame_sourcefile;
+
+		//printf("=====a===fwf=======\n");
+		writable = spage->frame_sourcefile->writable;
+		//printf("=====a==========\n");
+	} else if (spage->swap_slot != NULL) { // page in swap slot
+		// load data from swap slot to memory
+		frame_pin_kernel(kpage, PGSIZE);
+		swap_load(kpage, spage->swap_slot);
+		frame_unpin_kernel(kpage, PGSIZE);
+		dirty = true;
+	} else if (spage->zeropage != NULL) {
+		memset(kpage, 0, PGSIZE);
+	}
+	//printf("=======bbb========\n");
+	sema_down(&thread_current()->sema_pagedir);
+	pagedir_clear_page(thread_current()->pagedir, fault_page);
+	if (!pagedir_set_page(thread_current()->pagedir, fault_page, kpage,
+			writable)) { // register page to the process's address space.
+		sema_up(&thread_current()->sema_pagedir);
+		lock_frames();
+		frame_free(kpage);
+		unlock_frames();
+	//	printf("page fault! 4 set page error\n");
+		exit(-1);
+	}
+	pagedir_set_dirty(thread_current()->pagedir, fault_page, dirty);
+	pagedir_set_accessed(thread_current()->pagedir, fault_page, true);
+	sema_up(&thread_current()->sema_pagedir);
+	//printf("dealling access\n");
+}
+
+bool memory_writable(const void *p) // Check if the page has write access. If cannot locate the page in the page table, ignore the test and return true.
+{
+	//printf("=======\n");
+	if (is_user_vaddr(p)) {
+
+	} else {
+	//	printf("memorywritbale not user\n");
+		exit(-1);
+	}
+	if (p == NULL) {
+		//printf("memory not writable p is null\n");
+		return false;
+	}
+
+	if (is_reserved(p)) {
+		//printf("memory  not writable p is reserverd\n");
+		return false;
+	}
+
+	void *page_addr = pg_round_down(p);
+	struct suppl_page *page = (struct suppl_page *) malloc(
+			sizeof(struct suppl_page));
+	page->upage = page_addr;
+	struct hash_elem *elem = hash_find(&thread_current()->page_table,
+			&page->hash_elem);
+	free(page);
+	if (elem == NULL) {
+		//printf("memory writable can't find page\n");
+		if (frame_find_user(page_addr) != NULL) {
+			if (frame_find_user(page_addr)->writable) {
+				//printf("frame found, writable \n");
+				return true;
+			} else {
+				//printf("frame found, not writable %p\n", page_addr);
+				return false;
+			}
+		} else {
+			//printf("%p \n", page_addr);
+			//if (pagedir_get_page(&thread_current()->pagedir, page_addr)) {
+			//	printf("canit find frame!!!!!!!!!!! \n");
+			//}
+			//printf("canit find frame\n");
+
+		}
+		//printf("=======\n");
+		return true;
+	} else {
+		//printf("memory writable found page\n");
+
+	}
+
+	struct suppl_page *page_entry = hash_entry(elem, struct suppl_page,
+			hash_elem);
+	if (page_entry->writable) {
+		//printf("memory writable \n");
+	} else {
+		//printf("memory not writable \n");
+	}
+	//printf("=======\n");
+	return page_entry->writable;
 }
 
 typedef int pid_t;
@@ -35,77 +206,157 @@ void syscall_init(void) {
 	lock_init(&filesys_lock);
 }
 
-void * check_accessing_user_memory(struct intr_frame * f) {
+void * check_accessing_user_memory_using_intrframe(struct intr_frame * f) {
+	//printf("check access\n");
 	if (f == NULL) {
+	//	printf("check access null -1\n");
 		exit(-1);
 		return NULL;
 	}
 	if (is_user_vaddr(f->esp + argu_num)) {
 		if (pagedir_get_page(thread_current()->pagedir,
 				f->esp + argu_num) != NULL) {
-			//printf("    addd:    %p\n", f->esp+argu_num);
 			return pagedir_get_page(thread_current()->pagedir,
 					f->esp + argu_num);
 		} else {
+		//	printf("check access null\n");
 			exit(-1);
 			return NULL;
 		}
 	} else {
+		//printf("check access null2\n");
 		exit(-1);
 		return NULL;
 	}
 }
 
-void * check_accessing_user_memory2(void *esp) {
-	//printf("   addd:    %p\n", esp);
+void * check_return_kpage(void *esp, struct intr_frame * f) {
+	//printf("check return page at %p\n", esp);
+	//hex_dump(esp, esp, 300, 1);
 	if (is_user_vaddr(esp)) {
-		//printf("acces 2 success 1\n");
 		if (pagedir_get_page(thread_current()->pagedir, esp) != NULL) {
-			//printf("acces 2 success\n");
 			return pagedir_get_page(thread_current()->pagedir, esp);
 		} else {
+
+			dealling(esp, f);
+			if (pagedir_get_page(thread_current()->pagedir, esp) != NULL) {
+				//	printf("check return dealling good \n");
+				return pagedir_get_page(thread_current()->pagedir, esp);
+			} else {
+				//	printf("check return dealling not good \n");
+			}
+			//printf("esp : %p \n", esp);
+			//printf("f->esp : %p \n", f->esp);
+			if (is_stack_access(esp, f->esp)) { // stack growth
+				void *kpage = frame_get(PAL_USER, pg_round_down(esp), true);
+				pagedir_set_page(thread_current()->pagedir, pg_round_down(esp),
+						kpage,
+						true);
+				return kpage + (esp - pg_round_down(esp));
+			} else {
+				dealling(esp, f);
+				if (is_stack_access(esp, f->esp)) { // stack growth
+					void *kpage = frame_get(PAL_USER, pg_round_down(esp), true);
+					pagedir_set_page(thread_current()->pagedir,
+							pg_round_down(esp), kpage,
+							true);
+					return kpage + (esp - pg_round_down(esp));
+				} else {
+					//printf("check return page at 1\n");
+					return NULL;
+				}
+			}
+
+		}
+
+	} else {
+		//printf("check return page at 2\n");
+		return NULL;
+	}
+}
+
+bool check(void *esp, struct intr_frame * f) {
+//printf("check memory at %p\n", esp);
+//hex_dump(esp, esp, 300, 1);
+	if (is_user_vaddr(esp)) {
+		if (pagedir_get_page(thread_current()->pagedir, esp) != NULL) {
+			return false;
+		} else {
+			dealling(esp, f);
+			if (pagedir_get_page(thread_current()->pagedir, esp) != NULL) {
+				//printf("check dealling good \n");
+				return false;
+			} else {
+				//	printf("check dealling not good \n");
+			}
+			//printf("esp : %p \n", esp);
+			//printf("f->esp : %p \n", f->esp);
+			if (is_stack_access(esp, f->esp)) { // stack growth
+				void *kpage = frame_get(PAL_USER, pg_round_down(esp), true);
+				pagedir_set_page(thread_current()->pagedir, pg_round_down(esp),
+						kpage,
+						true);
+				return true;
+			} else {
+				dealling(esp, f);
+				if (is_stack_access(esp, f->esp)) { // stack growth
+					void *kpage = frame_get(PAL_USER, pg_round_down(esp), true);
+					pagedir_set_page(thread_current()->pagedir,
+							pg_round_down(esp), kpage,
+							true);
+					return true;
+				} else {
+					//	printf("check return page at 1\n");
+					return false;
+				}
+			}
+
+		}
+	} else {
+		return false;
+	}
+}
+
+void * check_accessing_user_memory(void *esp, struct intr_frame * f) {
+//	printf("check memory at %p\n", esp);
+	//hex_dump(esp, esp, 300, 1);
+	if (is_user_vaddr(esp)) {
+		if (pagedir_get_page(thread_current()->pagedir, esp) != NULL) {
+			//	printf("checka cc ess ok\n");
+			return pagedir_get_page(thread_current()->pagedir, esp);
+		} else {
+			//	printf("exit access 1\n");
 			exit(-1);
 			return NULL;
 		}
 	} else {
-		//printf("acces 2 fail\n");
+		//printf("exit access 2\n");
 		exit(-1);
 		return NULL;
 	}
+}
+
+int num_page_needed(int length) {
+	int numPage = length / PGSIZE; // number of pages needed to read
+	if (length % PGSIZE > 0) {
+		numPage++;
+	}
+	return numPage;
 }
 
 void* get_argument(struct intr_frame *f) {
-	// check memory
-//	while (f->esp <= PHYS_BASE) {
-	//printf("   address:    %p\n", f->esp+argu_num);
-	//	f->esp += 4;
-
-	//}
-	void *r = check_accessing_user_memory(f);
-	//printf("   content:    %d\n", *(int *) r);
-	//	printf("  content2:    %s\n", (char *) r);
-	//printf("  content3:    %p\n", r);
-	//	printf("  content4:    %s\n", (char *)check_accessing_user_memory2(r));
-	//if (argu_num == 8){
-	//	printf("  content5:    %s\n\n", *(char***)r);
-	//printf("  content6:    %s\n\n", (char *)*(int*)r);
-	//}
+// check memory
+	void *r = check_accessing_user_memory_using_intrframe(f);
 	argu_num += sizeof(int);
 	return r;
 }
 
 static void syscall_handler(struct intr_frame *f UNUSED) {
-	//printf("%s", "Called -----------------Sys handler \n");
+//printf("%s", "Called -----------------Sys handler \n");
 	argu_num = 0;
-	//printf("   address:    %p\n", f->esp);
-//	printf("  abc is :    %s\n", check_accessing_user_memory2((void *) 0xbffffffc));
-//	printf("  echo is :    %s\n", check_accessing_user_memory2((void *) 0xbffffff7));
-//	printf("  abc is :    %s\n", *(void **)(f->esp+8));--------
-	//putbuf(f->esp+8, 4);
-	//hex_dump(f->esp, f->esp, 200, 1);
-	//uint32_t *stack_pointer = f->esp;
 	uint32_t syscall_id = *(int*) get_argument(f);
-	//printf("Sys call ID is %d \n", syscall_id);
+//printf("Sys call ID is %d \n", syscall_id);
+//hex_dump(f->esp - 50, f->esp - 50, 300, 1);
 	switch (syscall_id) {
 	case SYS_HALT:
 		halt();
@@ -115,68 +366,97 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 		//printf("exit returned\n");
 		break;
 	case SYS_EXEC: {
-		char * real_buffer = (char *) check_accessing_user_memory2(
-				*(void **) get_argument(f));
+		char * real_buffer = (char *) check_accessing_user_memory(
+				*(void **) get_argument(f), f);
 		f->eax = exec(real_buffer);
 	}
 		break;
 	case SYS_WAIT:
 		f->eax = wait(*(pid_t *) get_argument(f));
-		printf(" debug wait 3\n");
 		//printf("wait returned\n");
 		break;
 	case SYS_CREATE: {
-		void * fn = get_argument(f);
+		//printf("creat called\n");
+		void * fn = *(void **) get_argument(f);
+		//printf("create fn %p\n", fn);
+		if (fn == NULL) {
+			//printf("create null\n");
+			exit(-1);
+		}
+		char * real_file = (char *) check_accessing_user_memory(fn, f);
 		unsigned size = *((unsigned *) get_argument(f));
-		f->eax = creat_file(fn, size);
+		//printf("creating\n");
+		f->eax = creat_file(real_file, size);
 	}
 		break;
-	case SYS_REMOVE:
-		f->eax = remove(get_argument(f));
+	case SYS_REMOVE: {
+		char * real_file = (char *) check_accessing_user_memory(
+				*(void **) get_argument(f), f);
+		f->eax = remove(real_file);
+	}
 		break;
-	case SYS_OPEN:
-		f->eax = open(get_argument(f));
+	case SYS_OPEN: {
+		//printf("open called \n");
+		void *fn = *(void **) get_argument(f);
+		//printf("open get argu  with %p\n", fn);
+		f->eax = open(fn, f);
+		//printf("open return with %d\n", f->eax);
+	}
 		break;
 	case SYS_FILESIZE:
 		f->eax = filesize(*((int *) get_argument(f)));
 		break;
 	case SYS_READ: {
-		//printf("read called \n");
+			//printf("read called \n");
 		int fd = *(int *) get_argument(f);
 		//printf("fd: %d\n", fd);
-		char * real_buffer = (char *) check_accessing_user_memory2(
-				*(void **) get_argument(f));
-		//printf("buffer: %s\n", (char*) real_buffer);
+		void *fn = *(void **) get_argument(f);
+		//printf("fn: %p\n", fn);
+		if (!memory_writable(fn)) {
+		//	printf("check access 100\n");
+			exit(-1);
+		}
 		unsigned size = *(unsigned *) get_argument(f);
-		//printf("size: %d\n", size);
-		f->eax = read(fd, real_buffer, size);
+			//printf("size: %d, read page needed : %d \n", size,
+			//	num_page_needed(size));
+		f->eax = read(fd, fn, size, f);
 		//printf("size read: %d\n", f->eax);
-		//write(1, real_buffer, size);
-
-		//printf("size should be  read: %d\n", strlen((char*) real_buffer));
+		//printf("read return \n");
 	}
 		break;
 	case SYS_WRITE: {
 		//printf("write called \n");
 		int fd = *(int *) get_argument(f);
-		char * real_buffer = (char *) check_accessing_user_memory2(
-				*(void **) get_argument(f));
+		//printf("write called 0\n");
+		void *fn = get_argument(f);
+		//printf("write called 1\n");
+		//printf("fd %d fn %s \n",fd, fn);
+		//printf(" fn get argument: %p \n", fn);
+		fn = *(void **) fn;
+		//printf(" fn real user address %p , esp: %p\n", fn, f->esp);
+		if (is_stack_access(fn, f->esp)) {
+			//printf(" is stack access \n");
+		} else {
+			//printf(" is not stack access \n");
+		}
 		unsigned size = *(unsigned *) get_argument(f);
+		//printf("size: %d, write page needed : %d \n", size,
+		//	num_page_needed(size));
+		//printf("write called 2\n");
+		//memory_is_good(fn + size);
+		//printf("write called 3===\n");
+		char * real_buffer = (char *) check_accessing_user_memory(fn, f);
+		//printf("write called 32===\n");
 		//printf("fd %d rb %s s %d\n",fd, real_buffer, size);
-		f->eax = write(fd, real_buffer, size);
-		//printf(" write return: %d \n",f->eax);
+		f->eax = write(fd, fn, real_buffer, size);
+		//printf(" write return: %d \n", f->eax);
 	}
 		break;
 	case SYS_SEEK: {
-		//hex_dump(f->esp-30, f->esp-30, 100, 1);
-
 		int h = *(int *) get_argument(f);
 		unsigned off = *(unsigned *) get_argument(f);
-//printf("handle = %d\n", h);
-//printf("off = %d\n", off);
 		seek(h, off);
 	}
-
 		break;
 	case SYS_TELL:
 		f->eax = tell(*((int *) get_argument(f)));
@@ -184,14 +464,31 @@ static void syscall_handler(struct intr_frame *f UNUSED) {
 	case SYS_CLOSE:
 		close(*(int *) get_argument(f));
 		break;
+	case SYS_MMAP: {
+		//printf("mmap calledd\n");
+		int mmap_fd = *(int *) get_argument(f);
+		char * realaddr = (char *) check_accessing_user_memory(
+				*(void **) get_argument(f), f);
+		if (realaddr == NULL) {
+			//printf("mmap nul!!!!!!!1\n");
+		}
+		f->eax = mmap(mmap_fd, realaddr);
+		//printf("mmap returnedd\n");
+	}
+		break;
+	case SYS_MUNMAP: {
+		int mmap_fd2 = *(int *) get_argument(f);
+		munmap(mmap_fd2);
+	}
+		break;
 	default:
 		printf("NOT REACCHED %i\n", syscall_id);
 		NOT_REACHED ()
 		;
 	}
 
-	//printf("system call!\n");
-	//thread_exit();
+//printf("system call!\n");
+//thread_exit();
 }
 
 void halt() {
@@ -199,163 +496,212 @@ void halt() {
 }
 
 int exit(int status) {
-	/*Terminates the current user program, sending its exit status to the kernel. If the process's
-	 parent waits for it (see below), this is the status that will be returned. Conventionally, a
-	 status of 0 indicates success and nonzero values indicate errors.
-	 */
-	//printf("::::::::::thread %d exit called with %d ::::::::::::\n",
-		//	thread_current()->tid, status);
 	thread_current()->exit_status = status;
-	printf("%s: exit(%d),%d,\n", thread_current()->name,thread_current()->tid, status);
-	///printf("exit call thread exit \n");
+// unmap before close
+	printf("%s: exit(%d)\n", thread_current()->name, status);
 	thread_exit();
-	//printf(" :::::::::::::::::thread exit return to exit\n");
-	//printf(":::::::::: exit return  with %d ::::::::::::\n", status);
 	return status;
 
 }
 
 pid_t exec(const char *cmd_line) {
-	//printf(" %s ", " ---exec called---\n");
-	/*Runs the executable whose name is given in cmd line, passing any given arguments, and
-	 returns the new process's program id (pid). Must return pid -1, which otherwise should not
-	 be a valid pid, if the program cannot load or run for any reason. Thus, the parent process
-	 cannot return from the exec until it knows whether the child process successfully loaded its
-	 executable. You must use appropriate synchronization to ensure this.*/
-	//printf("exe get calles ;;;;;;;;;;;;;;;;;\n");
 	lock_filesystem();
-	//printf("exec call process execute\n");
 	tid_t id = process_execute(cmd_line);
-	//printf(" process execute return to exec\n");
 	release_filesystem();
-	//printf("----exec return---- %d \n", id);
 	return id;
 }
 
 int wait(pid_t pid) {
-	//printf(" %s ", " ---wait called---\n");
-	printf("-debug wait 1----- %d waits for id : %d \n", thread_current()->tid, pid);
-	//printf(" debug wait 1\n");
-	if (pid == -1) {
-		//printf(" ----wait return error code: -1 \n");
+	if (pid <= 0) {
 		return -1;
 	}
 	int r = process_wait(pid);
-	printf(" debug wait 2\n");
-	//printf(" ---- %d waits for something return : %d \n", thread_current()->tid,
-		//	r);
 	return r;
 }
 
 int creat_file(void *file, unsigned initial_size) {
-	/*Creates a new file called file initially initial size bytes in size. Returns true if successful, false
-	 otherwise. Creating a new file does not open it: opening the new file is a separate operation
-	 which would require a open system call.*/
 	lock_filesystem();
-	char * real_file = (char *) check_accessing_user_memory2(*(void **) file);
-	//printf(" real file %s\n",real_file);
-	//printf("%d\n",initial_size);
-	int filesys_cr = filesys_create(real_file, initial_size) ? 1 : 0;
-	//printf("%d\n",filesys_cr);
+	int filesys_cr = filesys_create(file, initial_size) ? 1 : 0;
 	release_filesystem();
 	return filesys_cr;
 }
 
 int remove(void *file) {
-	//printf(" %s ", " ---remove called---\n");
-	/*Deletes the file called file. Returns true if successful, false otherwise. A file may be removed
-	 regardless of whether it is open or closed, and removing an open file does not close it. See
-	 [Removing an Open File], page 36, for details.*/
 	lock_filesystem();
-	char * real_file = (char *) check_accessing_user_memory2(*(void **) file);
-	int rem = filesys_remove(real_file);
+	int rem = filesys_remove(file);
 	release_filesystem();
 	return rem;
 }
 
-int open(void *file) {
-	//printf(" %s ", " ---open called---\n");
-	/*Opens the file called file. Returns a nonnegative integer handle called a \file descriptor" (fd),
-	 or -1 if the file could not be opened.
-	 File descriptors numbered 0 and 1 are reserved for the console: fd 0 (STDIN_FILENO) is stan-
-	 dard input, fd 1 (STDOUT_FILENO) is standard output. The open system call will never return
-	 either of these file descriptors, which are valid as system call arguments only as explicitly
-	 described below.
-	 Each process has an independent set of file descriptors. File descriptors are not inherited by
-	 child processes.
-	 When a single file is opened more than once, whether by a single process or different processes,
-	 each open returns a new file descriptor. Different file descriptors for a single file are closed
-	 independently in separate calls to close and they do not share a file position.*/
+int open(void *file2, struct intr_frame *f) { // pass in user memory address
+//printf("open method called\n");
+	char * file = (char *) check_accessing_user_memory(file2, f);
+//printf("first kernel addr got %p \n",file);
+	void * realfile = malloc(PGSIZE);
+	void * pageaddr = pg_round_down(file2);
+	long leftsize = file2 - pageaddr;
+//printf(" left size: %d \n",leftsize);
+	memcpy(realfile, file, leftsize);
+//printf(" getting second \n");
+	if (is_user_vaddr(pageaddr + PGSIZE)) {
+		if (pagedir_get_page(thread_current()->pagedir,
+				pageaddr + PGSIZE) != NULL) {
+			file = (char *) check_accessing_user_memory(pageaddr + PGSIZE, f);
+			//printf(" second file %s\n",file);
+			//printf(" pgsize - left size: %d \n",PGSIZE-leftsize);
+			memcpy(realfile + PGSIZE - leftsize, file, PGSIZE - leftsize);
+			//printf(" raal file \n");
+		}
+	}
+
+//hex_dump(realfile, realfile, 300, 1);
+
+	/*bool checkvar = true;
+	 int i = 0;
+	 while (checkvar) {
+	 checkvar = check(up, f);
+	 up+=PGSIZE;
+	 i++;
+	 printf("cehck %d \n",i);
+	 }*/
 
 	lock_filesystem();
-	char * real_file = (char *) check_accessing_user_memory2(*(void **) file);
-	struct file* newfile = filesys_open(real_file);
+//printf("opening file at %p\n", realfile);
+	struct file* newfile = filesys_open(realfile);
+	free(realfile);
 	release_filesystem();
 	if (newfile == NULL) {
-		//printf("not getting file in open\n");
 		return -1;
 	}
 	int ret = add_file_to_thread(newfile);
-	//printf("open returning %d\n",ret);
 	return ret;
 }
 
 int filesize(int fd) {
-	//printf(" %s ", " ---file size called---\n");
-	/*turns the size, in bytes, of the file open as fd.**/
-
 	struct thread *t = thread_current();
 	struct file *f = get_file_from_fd(fd);
 	if (f == NULL)
-		//printf("not getting file in file size\n");
-	exit(-1);
+		//printf("file size null access\n");
+		exit(-1);
 	return file_length(f);
 }
 
-int read(int fd, void *buffer, unsigned size) {
-	//printf(" %s ", " ---Read called---\n");
-	/*Reads size bytes from the file open as fd into buffer. Returns the number of bytes actually
-	 read (0 at end of file), or -1 if the file could not be read (due to a condition other than
-	 end of file). Fd 0 reads from the keyboard using input_getc(), which can be found in
-	 `src/devices/input.h'.*/
-	//printf("read called \n");
+int read(int fd, void *fn, unsigned size, struct intr_frame *f) {
+	//printf("read method called, size: %d \n", size);
+	char * buffer;
+	if (is_user_vaddr(fn)) {
+		if (pagedir_get_page(thread_current()->pagedir, fn) != NULL) {
+			//printf("read check checka cc ess ok\n");
+			buffer = pagedir_get_page(thread_current()->pagedir, fn);
+		} else {
+			dealling(fn, f);
+			if (pagedir_get_page(thread_current()->pagedir, fn) != NULL) {
+				//printf("read check checka cc ess ok\n");
+				buffer = pagedir_get_page(thread_current()->pagedir, fn);
+			} else {
+				//printf("fn : %p \n", fn);
+				//	printf("f->esp : %p \n", f->esp);
+				if (is_stack_access(fn, f->esp)) { // stack growth
+					//printf("is stack    %d\n",f->esp-fn);
+					void *kpage = frame_get(PAL_USER, pg_round_down(fn), true);
+					pagedir_set_page(thread_current()->pagedir,
+							pg_round_down(fn), kpage,
+							true);
+					buffer = kpage + (fn - pg_round_down(fn));
+				} else {
+					//printf("is not  stack  \n");
+					exit(-1);
+				}
+			}
+
+		}
+	} else {
+		//printf("read exit access 2\n");
+		exit(-1);
+	}
+
+	void *up = fn + PGSIZE;
+	//printf("buffer: %p\n", buffer);
+	bool checkvar = true;
+	int i = 0;
+	while (checkvar) {
+		checkvar = check(up, f);
+		up += PGSIZE;
+		i++;
+		//	printf("cehck %d, up: %p \n", i, up);
+	}
 	struct thread * t = thread_current();
-	if (fd == 1) {
-		//printf(" %s ", "error\n");
+	if (fd == STDOUT_FILENO) {
+			//printf("read exit -1\n");
 		exit(-1);
 		return -1;
 		//ERROR, try to read from std out
-	} else if (fd == 0) { // read from key board
-		//printf(" %s ", "read from key board\n");
+	} else if (fd == STDIN_FILENO) { // read from key board
+		//printf("read e===2\n");
 		int siz = 0;
 		lock_filesystem();
+		//frame_pin(buffer, size); //pin frame while read
 		for (siz = 0; siz < size; siz++) {
 			*(uint8_t*) (buffer + size) = input_getc();
 		}
+		//frame_unpin(buffer, size); // unpin
 		release_filesystem();
 		return size;
 	} else {
+		//printf("read e34343===\n");
 		lock_filesystem();
-		//printf("leng th %d\n",list_size(&t->file_fd_list));
 		if (list_empty(&t->file_fd_list)) {
-		//	printf("fd list empty -----\n");
+		//		printf("read exit 0\n");
 			release_filesystem();
 			exit(-1);
 			return -1;
 		}
+		//	printf("read e===\n");
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
-			//	printf("reading with %d  %p  %d\n",fd,buffer,size);
-			//file_seek(f, 0);
-			int l = file_length(f);
-			//	printf("file length: %d\n", l);
-			//			int	size_read = (int) file_read(f, buffer, l );
-			//		printf("size read long: %d\n", size_read);
-			//	printf("buffer read: long %s\n", buffer);
-			//file_seek(f, 260);
-			int size_read = (int) file_read(f, buffer, size);
-			//printf("size read real: %d\n", size_read);
-			//	printf("buffer after read: %s\n", (char*) buffer);
+			int size_read = 0;
+			if (PGSIZE - ((int) buffer - (int) pg_round_down(buffer)) < size) {
+				//printf("reading  not directly------------\n");
+				int sizeleft = size;
+				void * currentAddr = fn;
+				while (sizeleft > 0) {
+					size_t readLength =
+					PGSIZE
+							- ((int) currentAddr
+									- (int) pg_round_down(currentAddr));
+					if (readLength > sizeleft) {
+						readLength = sizeleft;
+					}
+					//	printf("reading diff pages === read legnth: %d\n",
+					//		readLength);
+					void * kpage = check_return_kpage(currentAddr, f);
+					//frame_pin(kage, readLength);
+					//	printf("kpage: %p \n", kpage);
+					//	printf("read file offsetl %d \n", size - sizeleft);
+					size_read += (int) file_read_at(f, kpage, readLength,
+							size - sizeleft);
+					//frame_unpin(kpage, readLength);
+					currentAddr += readLength;
+					sizeleft -= readLength;
+				}
+				//	printf("\n read buffer  ==%p===  %s\n",
+				//	pagedir_get_page(thread_current()->pagedir, fn),
+				//		check_return_kpage(fn, f));
+				//	printf("\n read buffer  =====  %s\n",
+				//		check_return_kpage(pg_round_down(fn) + PGSIZE, f));
+				//printf("\n read buffer end ===== \n");
+			} else {
+				//frame_pin(buffer, size); // pin frame while read#
+				//	printf("reading  directly-----  -----buffer %p:--\n", buffer);
+				size_read = (int) file_read(f, buffer, size);
+				//	printf("\n read buffer  ==%p===  %s\n",
+				//			pagedir_get_page(thread_current()->pagedir, fn),
+				//			check_return_kpage(fn, f));
+				//	printf("\n read buffer  =====  %s\n",
+				//	check_return_kpage(pg_round_down(fn) + PGSIZE, f));
+				//	printf("\n read buffer end ===== \n");
+				////frame_pin(buffer, size);; // un pin
+			}
 			if (size_read == size) {
 				release_filesystem();
 				return size_read;
@@ -363,31 +709,31 @@ int read(int fd, void *buffer, unsigned size) {
 				release_filesystem();
 				return 0;
 			} else {
-				//printf("read exit -1 1 %d\n");
+			//	printf("read exit 1\n");
 				release_filesystem();
 				exit(-1);
 				return -1;
 			}
-
 		} else {
-			//printf("NULL -----\n");
+				//printf("read exit 2\n");
 			release_filesystem();
 			exit(-1);
 			return -1;
 		}
 	}
-
+	//printf("read e===========\n");
 }
 
-int write(int fd, const void *buffer, unsigned size) {
+int write(int fd, void* fn, const void *buffer, unsigned size) {
+//printf("write method222, buffer: %p , size : %d \n", buffer, size);
 	struct thread * t = thread_current();
-
-	if (fd == 0) {
+	if (fd == STDIN_FILENO) {
 		exit(-1);
 		return -1;
-	} else if (fd == 1) { // to console
+	} else if (fd == STDOUT_FILENO) { // to console
 		lock_filesystem();
 		int written = 0;
+		//frame_pin(buffer, size); // pin frame when writing
 		if (size < 200) {
 			putbuf(buffer, size);
 			written = size;
@@ -400,52 +746,77 @@ int write(int fd, const void *buffer, unsigned size) {
 			putbuf((buffer + written), size);
 			written += size;
 		}
+		//frame_unpin(buffer, size); // un pin
 		release_filesystem();
 		return written;
 	} else {
 		if (list_empty(&t->file_fd_list)) {
-			//printf("fd list empty -----\n");
-			//release_filesystem();
+		//	printf("list empty access\n");
 			exit(-1);
 			return -1;
 		}
 		struct file* f = get_file_from_fd(fd);
 		if (f != NULL) {
-			lock_filesystem();
-			if (f != NULL) {
-				//printf("writing ing \n");
-				//printf("writing with %d  %p  %d\n",fd,buffer,size);
-				int size_wrote = file_write(f, buffer, size);
-				//write(1,buffer,size);
-				//printf("wrtoe : %d\n", size_wrote);
+			if (PGSIZE - ((int) buffer - (int) pg_round_down(buffer)) < size) {
+				int d1 = (int) buffer - (int) pg_round_down(buffer);
+				int d = PGSIZE - ((int) buffer - (int) pg_round_down(buffer));
+				//printf("writing dealling === %d, %d \n", d1, d);
+
+				//printf("write buffer: \n %s", check_return_kpage(fn, f));
+				//printf("write buffer: \n %s",
+				//check_return_kpage(pg_round_down(fn) + PGSIZE, f));
+
+				int size_wrote = 0;
+				int sizeleft = size;
+				void * currentAddr = fn;
+				lock_filesystem();
+				while (sizeleft > 0) {
+					size_t readLength =
+					PGSIZE
+							- ((int) currentAddr
+									- (int) pg_round_down(currentAddr));
+					if (readLength > sizeleft) {
+						readLength = sizeleft;
+					}
+					//printf("writing diff pages ===\n");
+					void * kpage = check_return_kpage(currentAddr, f);
+					//frame_pin(kage, readLength);
+					size_wrote += (int) file_write_at(f, kpage, readLength,
+							size - sizeleft);
+					//frame_unpin(kpage, readLength);
+					currentAddr += readLength;
+					sizeleft -= readLength;
+				}
+				//printf("\nwrite buffer end ===== \n");
 				release_filesystem();
 				return size_wrote;
 			} else {
-
+				//printf("writing not dealling ===\n");
+				lock_filesystem();
+				//frame_pin(buffer, size); // pin frame when writing
+				//	printf("\nwrite buffer: \n %s", check_return_kpage(fn, f));
+				//printf("\nwrite buffer: \n %s",
+				//	check_return_kpage(pg_round_down(fn) + PGSIZE, f);
+				int size_wrote = file_write(f, buffer, size);
+				//printf("\nwrite buffer end ===== \n");
+				//frame_unpin(buffer, size); // un pin
 				release_filesystem();
-				return 0;
+				return size_wrote;
 			}
+
 		} else {
-			//printf("wrtie exiting with -1\n");
+		//	printf("wtirrrrrrr access\n");
 			exit(-1);
-			return 0;
+			return -1;
 		}
 	}
 }
 
 void seek(int fd, unsigned position) {
-	/*Changes the next byte to be read or written in open file fd to position, expressed in bytes
-	 from the beginning of the file. (Thus, a position of 0 is the file's start.)
-	 A seek past the current end of a file is not an error. A later read obtains 0 bytes, indicating
-	 end of file. A later write extends the file, filling any unwritten gap with zeros. (However, in
-	 Pintos files have a fixed length until task 4 is complete, so writes past end of file will return
-	 an error.) These semantics are implemented in the file system and do not require any special
-	 effort in system call implementation.
-	 */
 	struct thread * t = thread_current();
 	struct file * f = get_file_from_fd(fd);
 	if (f == NULL) {
-		//printf("not getting file in seek\n");
+	//	printf("seek access\n");
 		exit(-1);
 	}
 	lock_filesystem();
@@ -454,14 +825,10 @@ void seek(int fd, unsigned position) {
 }
 
 int tell(int fd) {
-	/*Returns the position of the next byte to be read or written in open file fd, expressed in bytes
-	 from the beginning of the file.
-	 */
-	struct thread * t = thread_current();
 	struct file * f = get_file_from_fd(fd);
 	if (f == NULL)
-		//printf("not getting file in tell\n");
-	exit(-1); // not getting file
+		//printf("tell check access\n");
+		exit(-1); // not getting file
 	lock_filesystem();
 	off_t position = file_tell(f);
 	release_filesystem();
@@ -470,134 +837,145 @@ int tell(int fd) {
 
 void close(int fd) {
 	if (list_empty(&thread_current()->file_fd_list)) {
-		//printf("file list empty in close\n");
 		exit(-1); // no file to close
 	}
-	struct file * f = delete_file_from_thread(fd);
+	struct file *f = get_file_from_fd(fd);
 	if (f == NULL) {
-		//printf("not getting file in close\n");
 		exit(-1); // not getting file
 	} else {
 		lock_filesystem();
 		file_close(f);      //Close file in the system
+		delete_file_from_thread(fd); // delete file in file list
 		release_filesystem();
 	}
 
 }
-/*mapid_t mmap (int fd, void *addr) [System Call]
-Maps the le open as fd into the process's virtual address space. The entire le is mapped
-into consecutive virtual pages starting at addr.
-Your VM system must lazily load pages in mmap regions and use the mmaped le itself as
-backing store for the mapping. That is, evicting a page mapped by mmap writes it back to
-the le it was mapped from.
-If the le's length is not a multiple of PGSIZE, then some bytes in the nal mapped page
-\stick out" beyond the end of the le. Set these bytes to zero when the page is faulted in
-from the le system, and discard them when the page is written back to disk.
-If successful, this function returns a \mapping ID" that uniquely identies the mapping within
-the process. On failure, it must return -1, which otherwise should not be a valid mapping id,
-and the process's mappings must be unchanged.
-A call to mmap may fail if the le open as fd has a length of zero bytes. It must fail if addr is
-not page-aligned or if the range of pages mapped overlaps any existing set of mapped pages,
-including the stack or pages mapped at executable load time. It must also fail if addr is 0,
-because some Pintos code assumes virtual page 0 is not mapped. Finally, le descriptors 0
-and 1, representing console input and output, are not mappable.
-void munmap (mapid t mapping) [System Call]
-Unmaps the mapping designated by mapping, which must be a mapping ID returned by a
-previous call to mmap by the same process that has not yet been unmapped.*/
 
-/*
-// void mmap( int, void * ) - Mmaps a file with the given descriptor to the address in memory
-static void
-syscall_mmap (int *args, struct intr_frame *f UNUSED)
-{
-  struct thread * t = thread_current ();
+// mapid_t mmap (int fd, void *addr)
+int mmap(int fd, void *uaddr) { // maps a file with the fd to memory address uaddr
+//printf("enter mmap %d\n", fd);
+	struct thread * current = thread_current();
+	if (fd == 0 || fd == 1) { // check fd
+		return -1;
+	}
+	struct file * f = get_file_from_fd(fd); // get file handle from fd
+	if (f == NULL)
+		exit(-1);
 
-  if(args[1] == 0 || args[1] == 1){
-    f->eax = -1;
-    return;
-  }
-  struct file_handle * fh = thread_get_file (&t->files, args[1]);
-  if(fh == NULL) syscall_t_exit (t -> name, -1);
+//printf("mmap file length\n");
+//printf("mmap %d\n",fh->fd);
+	int fillen = file_length(f); // get file length
+//printf("mmap file length 2\n");
+	if (fillen == 0 || uaddr == 0 || (int) uaddr % PGSIZE > 0) { // file length empty or address is zero or not page-aligned
+		return -1;
+	}
 
-  size_t fl = file_length (fh->file);
-  if(fl == 0 || args[2] == 0 || args[2] % PGSIZE > 0){
-    f->eax = -1;
-    return;
-  }
+	lock_filesystem();
+	int mmap_fd = thread_add_mmap_file(file_reopen(f)); //add mmap file
+	release_filesystem();
+//printf("mmap file length 3\n");
+	struct file_fd * mmap_fh = get_filefd_from_fd_mmap(mmap_fd); // get mmap file handle
+//printf("mmap file length 4\n");
+	mmap_fh->userPage = uaddr;
+	int numPage = fillen / PGSIZE; // number of pages needed
+	if (fillen % PGSIZE > 0) {
+		numPage++;
+	}
+//printf("mmap file length 42\n");
+	int i;
+	for (i = 0; i < numPage; i++) { // loop through pages needed to map
+		size_t readLength = (i == numPage - 1) ? fillen % PGSIZE : PGSIZE;
+		off_t offset = i * PGSIZE;
+		int current_page_address = uaddr + offset;
 
-  // Book the memory
-  int mmap_fd = thread_add_mmap_file (file_reopen (fh->file));
-  struct file_handle * mmap_fh = thread_get_file (&t->mmap_files, mmap_fd);
+		sema_down(&current->sema_pagedir);
+		//void * currentKernelAddress =
+		sema_up(&current->sema_pagedir);
+		//printf("mmap file length 5\n");
+		if (frame_find_kernel(current_page_address) != NULL) { // overlap with other data
+			return -1;
+		}
+		//printf("mmap file length 51\n");
+		void *kpage = frame_get(uaddr, true, true);
+		//printf("mmap file length 52\n");
 
-  void * upage = (void*)args[2];
-  mmap_fh->upage = upage;
-  int pages = fl / PGSIZE;
-  if(fl % PGSIZE > 0){
-    pages++;
-  }
+		if (kpage == NULL) {
+			//printf("mmap file length 53\n");
+			exit(-1);
+		}
+		struct frame *fme = frame_find_user(uaddr);
+		//printf("mmap file length 54\n");
+		//printf("%d\n", readLength);
+		if (fme == NULL) {
+			//printf("%s\n", "frame_null");
+		}
+		if (fme->frame_sourcefile == NULL) {
+			//printf("%s\n", "file null");
+		}
+		fme->frame_sourcefile->content_length = readLength;
+		//printf("mmap file length 562\n");
+		fme->frame_sourcefile->file_offset = offset;
+		//printf("mmap file length 56\n");
+		fme->frame_sourcefile->filename = mmap_fh->fil;
+		fme->frame_sourcefile->writable = true;
+		//printf("mmap file length 57\n");
+		add_supp_page(
+				new_file_page(current_page_address, true, mmap_fh->fil, offset,
+						readLength, true));
 
-  int i;
-  for(i = 0; i < pages; i++){
-    size_t zero_after = (i == pages - 1) ? fl % PGSIZE : PGSIZE;
-    off_t offset = i * PGSIZE;
-    struct suppl_page *new_page = new_file_page (mmap_fh->file, offset, zero_after, true, FILE);
-
-    sema_down (&t->pagedir_mod);
-    void * overlapControl = pagedir_get_page (t->pagedir, upage + offset);
-    sema_up (&t->pagedir_mod);
-
-    if(overlapControl != 0){
-      free (new_page);
-      f->eax = -1;
-      return;
-    }
-    sema_down (&t->pagedir_mod);
-    pagedir_set_page_suppl (t->pagedir, upage + offset, new_page);
-    sema_up (&t->pagedir_mod);
-  }
-
-  f->eax = mmap_fd;
+		//printf("mmap file length 55\n");
+	}
+//printf("mmap file length 6\n");
+	return mmap_fd;
 }
-/*
-// void munmap( mapid_t ) - Unmaps a file with the given descriptor
-static void
-syscall_munmap (int *args, struct intr_frame *f UNUSED)
-{
-  struct thread * t = thread_current ();
-  struct file_handle * fh = thread_get_file (&t->mmap_files, args[1]);
-  void * upage = fh->upage;
-  size_t fl = file_length (fh->file);
-  int pages = fl / PGSIZE;
-  if(fl % PGSIZE > 0){
-    pages++;
-  }
 
-  int i;
-  for(i = 0; i < pages; i++){
-    void * uaddr = upage + i*PGSIZE;
-    sema_down (&t->pagedir_mod);
-    bool dirty = pagedir_is_dirty (t->pagedir, uaddr);
-    void * kpage = pagedir_get_page(t->pagedir, uaddr);
-    sema_up (&t->pagedir_mod);
-    if(pg_ofs (kpage) == 0 && dirty) {
-      int zero_after = (i == pages - 1) ? fl%PGSIZE : PGSIZE;
-      file_seek (fh->file, i*PGSIZE);
+// void munmap (mapid t mapping)
+void munmap(int mmap_fd) {
+	struct thread * current = thread_current();
+	struct file_fd * fh = get_fd_from_file(mmap_fd);
+	void * file_startaddr = fh->userPage; // take user virtual page
+	int32_t fil_len = file_length(fh->fil); // take file length
+	int page_num = fil_len / PGSIZE; // number of pages needed to contains the file
+	if (fil_len % PGSIZE > 0) {
+		page_num++;
+	}
+	int i = 0;
+	for (i = 0; i < page_num; i++) { //loop though pages
+		int offset = i * PGSIZE; // offset from file start address
+		void * page_addr = file_startaddr + offset; // current user page address
+		sema_down(&current->sema_pagedir);
+		bool dirty = pagedir_is_dirty(current->pagedir, page_addr);
+		void * kpage = pagedir_get_page(current->pagedir, page_addr); // get kernel memory address
+		sema_up(&current->sema_pagedir);
+		if ((pg_ofs(kpage) == 0) && dirty) {
+			int write_length = (i == page_num - 1) ? fil_len % PGSIZE : PGSIZE; // get write back length
+			lock_filesystem();
+			file_seek(fh->fil, offset);
+			release_filesystem();
 
-      frame_pin (uaddr, PGSIZE);
+			lock_frames();
+			//frame_pin(page_addr, PGSIZE); // pin frame
+			unlock_frames();
 
-      filesys_lock_acquire ();
-      file_write (fh->file, uaddr, zero_after);
-      filesys_lock_release ();
+			lock_filesystem();
+			file_write(fh->fil, page_addr, write_length); // write page back to file
+			release_filesystem();
 
-      frame_unpin (uaddr, PGSIZE);
-    }
-    sema_down (&t->pagedir_mod);
-    pagedir_clear_page (t->pagedir, uaddr);
-    sema_up (&t->pagedir_mod);
-  }
-
-  list_remove (&fh->elem);
-  file_close (fh->file);
-  free (fh);
-}*/
-
+			lock_frames();
+			//frame_unpin(page_addr, PGSIZE); // unpin frame
+			unlock_frames();
+		}
+		struct suppl_page *p = (struct suppl_page *) malloc(
+				sizeof(struct suppl_page));
+		p->upage = page_addr;
+		hash_delete(&current->page_table,
+				hash_find(&current->page_table, &p->hash_elem));
+		free(p);
+		sema_down(&current->sema_pagedir);
+		pagedir_clear_page(current->pagedir, page_addr);
+		sema_up(&current->sema_pagedir);
+	}
+	list_remove(&fh->file_fd_list_elem);
+	file_close(fh->fil);
+	free(fh);
+}
